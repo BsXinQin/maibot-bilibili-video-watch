@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "github.BsXinQin.bilibili_video_watch",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "name": "沁の刷B站视频",
   "description": "定时刷 B 站，按白名单聊天流的用户兴趣挑选有趣的视频分享；也能反过来读视频：别人贴链接自动 brief 快速读，@ 机器人或说「详细看看」时 full 深度读（字幕时间轴、弹幕时间线并抽帧看画面）。支持 LLM 语义判断与内容总结、按 MaiBot 人设口吻写分享文案、已刷名单、主动搜索与赤石视频工具。刷取频率可在配置中调节，每个配置项都带中文注释。",
   "author": {

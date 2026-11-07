@@ -442,7 +442,7 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
 
     def _make_plugin(self, **overrides):
         config = {
-            "plugin": {"enabled": True, "config_version": "1.3.0"},
+            "plugin": {"enabled": True, "config_version": "1.3.1"},
             "read": {
                 "enabled": True,
                 "auto_read_enabled": True,
@@ -587,6 +587,53 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
             "processed_plain_text": "https://www.bilibili.com/video/BV1TEST00001",
         }
         await self.plugin._maybe_auto_read(message)
+        self.assertEqual(self.appender.calls, [])
+
+    async def test_auto_read_all_streams_reads_unlisted_group(self) -> None:
+        async def boom(brief):
+            raise AssertionError("群聊贴链接不该抽帧")
+
+        plugin = self._make_plugin(read={"auto_read_all_streams": True})
+        plugin._describe_video_frames = boom
+        await plugin._maybe_auto_read(
+            {
+                "stream_id": "stream-9",
+                "message_info": {"group_info": {"group_id": "777", "group_name": "别的群"}},
+                "processed_plain_text": "https://www.bilibili.com/video/BV1TEST00001",
+            }
+        )
+        self.assertEqual(len(self.appender.calls), 1)
+        self.assertEqual(self.appender.calls[0]["stream_id"], "stream-9")
+        self.assertIn("快速读", self.appender.calls[0]["segments"][0]["content"])
+
+    async def test_auto_read_all_streams_private_defaults_to_full(self) -> None:
+        called = {}
+
+        async def fake_describe(brief):
+            called["bvid"] = brief.bvid
+            return "画面里是私聊发来的视频"
+
+        plugin = self._make_plugin(read={"auto_read_all_streams": True})
+        plugin._describe_video_frames = fake_describe
+        await plugin._maybe_auto_read(
+            {
+                "stream_id": "stream-9",
+                "processed_plain_text": "https://www.bilibili.com/video/BV1TEST00001",
+            }
+        )
+        self.assertEqual(called.get("bvid"), "BV1TEST00001")
+        self.assertEqual(len(self.appender.calls), 1)
+        self.assertIn("深度读", self.appender.calls[0]["segments"][0]["content"])
+
+    async def test_auto_read_all_streams_off_still_skips_unlisted(self) -> None:
+        plugin = self._make_plugin(read={"auto_read_all_streams": False})
+        await plugin._maybe_auto_read(
+            {
+                "stream_id": "stream-9",
+                "message_info": {"group_info": {"group_id": "777", "group_name": "别的群"}},
+                "processed_plain_text": "https://www.bilibili.com/video/BV1TEST00001",
+            }
+        )
         self.assertEqual(self.appender.calls, [])
 
     async def test_auto_read_skips_share_messages(self) -> None:

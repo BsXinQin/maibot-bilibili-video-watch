@@ -2091,12 +2091,21 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                     stream_id = value.strip()
                     break
         if not stream_id:
-            logger.debug("自动读：消息里取不到会话 id，跳过")
+            logger.info("贴了 B 站链接，但消息里取不到会话 id，没法自动读")
             return
         scope = await self._stream_scope_for_message(stream_id, message)
         if not scope:
-            logger.debug("会话 %s 不在白名单，跳过自动读视频", stream_id)
-            return
+            if getattr(config.read, "auto_read_all_streams", False):
+                # 全量模式：不在白名单也读，群聊 / 私聊按消息里有没有群号区分
+                scope = "group" if _message_group_id(message) else "private"
+            else:
+                logger.info(
+                    "会话 %s（群 %s）有人贴了 B 站链接，但不在白名单，没有自动读；"
+                    "想让所有会话都读，打开 [read].auto_read_all_streams",
+                    stream_id,
+                    _message_group_id(message) or "-",
+                )
+                return
 
         deep = wants_full_read(message, text, config.read.full_trigger_keywords)
         # 私聊里没有 @ 这种操作，对着麦麦贴链接本身就是「特意让我看」，默认深度读
@@ -2137,7 +2146,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - 自动读失败只是一条日志
-                logger.debug("自动读视频失败（%s）：%s", item, exc)
+                logger.warning("自动读视频失败（%s）：%s", item, exc)
                 continue
             self._auto_read_seen[seen_key] = now
             if await self._append_read_context(stream_id, brief, brief_text, deep=deep):

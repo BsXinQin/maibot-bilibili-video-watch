@@ -41,7 +41,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.3.0",
+        default="1.3.1",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -797,6 +797,14 @@ class ReadConfig(PluginConfigBase):
         default=True,
         description="白名单聊天流里有人贴 B 站链接时，自动读一遍并把要点交给麦麦（不用它主动调用工具）",
         json_schema_extra={"label": "贴链接自动读"},
+    )
+    auto_read_all_streams: bool = Field(
+        default=False,
+        description=(
+            "不只白名单：机器人所在的任何会话里有人贴 B 站链接都自动读。"
+            "白名单没覆盖到的群 / 私聊靠这个生效；群聊仍只做 brief，私聊仍按 full_in_private"
+        ),
+        json_schema_extra={"label": "所有会话都自动读"},
     )
     full_trigger_keywords: List[str] = Field(
         default=[

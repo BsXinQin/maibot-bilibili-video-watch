@@ -54,7 +54,7 @@ def base_config(**overrides):
     """返回一份“一定会分享”的测试配置（默认关闭 LLM/抽帧/弹幕，保证确定性）。"""
 
     config = {
-        "plugin": {"enabled": True, "config_version": "1.3.0"},
+        "plugin": {"enabled": True, "config_version": "1.3.1"},
         "schedule": {
             "interval_minutes": 30,
             "jitter_seconds": 0,
@@ -734,7 +734,7 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(defaults["schedule"]["interval_minutes"], 60)
         self.assertEqual(defaults["schedule"]["search_cooldown_seconds"], 300)
         self.assertTrue(defaults["plugin"]["enabled"])
-        self.assertEqual(defaults["plugin"]["config_version"], "1.3.0")
+        self.assertEqual(defaults["plugin"]["config_version"], "1.3.1")
         self.assertEqual(defaults["interest"]["llm_task_name"], "planner")
         self.assertEqual(defaults["vision"]["task_name"], "vlm")
         self.assertTrue(defaults["categories"])
@@ -742,6 +742,7 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(defaults["share"]["include_stats_line"])
         self.assertTrue(defaults["read"]["full_vision_enabled"])
         self.assertTrue(defaults["read"]["full_in_private"])
+        self.assertFalse(defaults["read"]["auto_read_all_streams"])
         self.assertIn("详细看看", defaults["read"]["full_trigger_keywords"])
 
     def test_config_schema_includes_streams(self) -> None:
@@ -1266,7 +1267,7 @@ class PackagingTest(unittest.TestCase):
             raw = tomllib.load(handle)
         plugin = load_plugin_module().BilibiliInterestSharePlugin()
         plugin.set_plugin_config(raw)  # 不应抛异常
-        self.assertEqual(plugin.config.plugin.config_version, "1.3.0")
+        self.assertEqual(plugin.config.plugin.config_version, "1.3.1")
         self.assertEqual(plugin.config.streams, [])
         self.assertTrue(plugin.config.categories)
         self.assertEqual(plugin.config.vision.task_name, "vlm")

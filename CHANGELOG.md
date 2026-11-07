@@ -5,6 +5,19 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.3.1] - 2026-11-08
+
+白名单外会话里贴链接既读不到、也看不到原因，补上一个开关和几条能看见的日志。
+
+### 新增
+
+- `[read].auto_read_all_streams`（默认 `false`）：打开后不再要求会话在 `[[streams]]` 里，机器人所在的任何会话有人贴 B 站链接都会自动读。群聊仍只做 brief、私聊仍按 `full_in_private` 判断深浅。
+
+### 变更
+
+- 链接落在白名单外的会话时，日志由 debug 改为 INFO 并带上会话 id 与群号，直接说明是白名单没命中、以及怎么让它生效。
+- 自动读视频失败（短链解析失败、HTTP 412 风控、接口报错等）由 debug 改为 WARNING，报错原文进日志，不再静默跳过。
+
 ## [1.3.0] - 2026-11-08
 
 按实际使用反馈清理配置、去掉用不上的模块，并修好「别人贴链接麦麦不自动看」。

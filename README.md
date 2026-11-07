@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.3.0-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.3.1-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v1.3.0** · 全部配置项已中文化 · 手动填 Cookie 登录 · 读视频分 brief / full 两档
+> 当前版本 **v1.3.1** · 全部配置项已中文化 · 手动填 Cookie 登录 · 读视频分 brief / full 两档
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -157,7 +157,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.3.0"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.3.1"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -385,6 +385,7 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 | `enabled` | `true` | 是否启用 `bili_read` 工具（关掉后麦麦就调不到它了） |
 | `auto_read_enabled` | `true` | 白名单会话里贴链接时是否自动读 |
 | `auto_read_max_links` | `1` | 一条消息最多自动读几个链接（`1`~`3`，防止刷屏） |
+| `auto_read_all_streams` | `false` | 关掉白名单限制：机器人所在的**任何会话**有人贴链接都自动读（群聊仍只做 brief，私聊仍按 `full_in_private`）。`[[streams]]` 没覆盖到的群靠它生效 |
 | `full_in_private` | `true` | 白名单里按「私聊用户 ID」配置的会话，贴链接默认按 full 深度读（含抽帧看画面）；关掉则私聊也只认 @ 和 `full_trigger_keywords` |
 | `full_trigger_keywords` | 见配置 | 命中这些词就自动切 full 深度读（@ 麦麦也会触发）。默认「详细看看 / 仔细看看 / 认真看 / 深度看 / 完整看 / 展开说说 / 细讲 / 逐段 / 画面讲了什么 / 画面内容」 |
 | `full_vision_enabled` | `true` | full 读时是否抽帧交给视觉模型看画面（还要 `[vision].enabled` 同时打开、`vlm` 任务可用） |
@@ -624,6 +625,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v1.3.1**：修「白名单没覆盖的群里贴链接不自动读也没任何提示」。新增 `[read].auto_read_all_streams`（默认关）：打开后机器人所在的任何会话有人贴 B 站链接都会自动读，不再要求先写进 `[[streams]]`；关着时如果链接落在白名单外的会话，日志会打一条 INFO 说明是白名单没命中（以前是 debug，看不见）。自动读失败（短链解析失败、412 风控、B 站接口报错等）从 debug 改成 WARNING，报错原因直接进日志。
 - **v1.3.0**：清理与修复。删掉「分享格式」里实际不起作用的七个选项（`casual_mode` / `intro_enabled` / `intro_max_chars` / `send_as_parts` / `part_delay_seconds` / `narrative_enabled` / `narrative_max_chars`），分享固定为一条「随口一句 + 【标题】链接」；删掉整个「重发」模块（`[reshare]` 配置、钩子里的重发逻辑、历史记录模糊匹配）。修好「别人在群里贴 B 站链接麦麦不自动看」：自动读改挂 `chat.receive.after_process`（原来挂在 `before_process`，那时消息还没 `process()`，取不到正文），并支持 `data` 为字符串的文本段、JSON 结构化段与平台卡片；白名单判定也接受「消息里的 group_id / user_id 命中 `[[streams]]`」，新群第一条消息就能生效。
 - **v1.2.1**：修「麦麦调 `bili_read` 传 `detail="full"` 时不看画面」——深度读现在和自动读一样会抽帧交给视觉模型，返回内容里带 `【画面描述（抽帧）】`，同一个视频的画面描述会缓存 `cache_seconds` 秒避免重复抽帧；新增 `[read].full_in_private`（默认开），白名单里的私聊会话贴链接直接按 full 深度读。
 - **v1.2.0**：删掉扫码登录与全部聊天指令（平台会拦截），读视频改成 brief / full 两档——别人贴链接默认 brief、不调视觉模型；@ 麦麦或说「详细看看」时切 full，带字幕时间轴、弹幕时间线并抽帧识图。分享默认只发一条简短消息（`intro_enabled` / `send_as_parts` / `narrative_enabled` 默认关闭）；主动搜索与赤石改成 `bili_search` / `bili_shiwei` 工具，白名单与冷却照旧。
