@@ -71,6 +71,30 @@ _PRIVATE_HOST_SUFFIXES = (
 _PRIVATE_HOSTS = frozenset({"localhost", "localhost.localdomain", "ip6-localhost"})
 _MAX_DOWNLOAD_REDIRECTS = 5
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+# 短链服务：只跟随这两类域名上的跳转，落到 bilibili.com 后立刻停下
+_SHORT_LINK_HOSTS = ("b23.tv", "bili2233.cn")
+_MAX_SHORT_REDIRECTS = 5
+_VIDEO_URL_RE = re.compile(r"/bv[0-9a-z]{8,}", re.I)
+
+
+def _looks_like_video_url(url: str) -> bool:
+    """判断跳转目标是不是已经落在视频页上（是就不用再请求下一页）。"""
+
+    text = (url or "").lower()
+    if "/video/" in text or "/bangumi/play/" in text:
+        return True
+    return bool(_VIDEO_URL_RE.search(text))
+
+
+def _is_short_link_host(url: str) -> bool:
+    """判断 URL 是否还停在短链服务域名上。"""
+
+    host = (urllib.parse.urlparse(url or "").hostname or "").lower()
+    if not host:
+        return False
+    if host in _SHORT_LINK_HOSTS:
+        return True
+    return any(host.endswith("." + item) for item in _SHORT_LINK_HOSTS)
 
 
 def _is_private_host(host: str) -> bool:
@@ -865,18 +889,53 @@ class BilibiliDetailMixin:
         return segments
 
     async def resolve_redirect(self, url: str) -> str:
-        """跟随 302 短链（b23.tv / bili2233.cn），返回最终地址。"""
+        """跟随 302 短链（b23.tv / bili2233.cn），返回最终地址。
+
+        手动跟随跳转（follow_redirects=False），只读响应头里的 Location，
+        不去请求跳转后的视频页：视频页是 HTML 页面，对机房 IP 很容易被
+        B 站 WAF 拦成 HTTP 412（短链本身没坏，坏的是那次多余的页面请求）。
+        拿到带 BV 号的地址后，调用方直接走 api 接口就行。
+        """
 
         url = (url or "").strip()
         if not url:
             raise BilibiliError("短链为空")
-        try:
-            response = await self._client.get(url)
-        except httpx.HTTPError as exc:
-            raise BilibiliError(f"解析短链失败：{exc}") from exc
-        if response.status_code >= 400:
-            raise BilibiliError(f"解析短链失败：HTTP {response.status_code}")
-        return str(response.url)
+        current = url
+        retried = False
+        for _ in range(_MAX_SHORT_REDIRECTS + 1):
+            try:
+                response = await self._client.get(current, follow_redirects=False)
+            except httpx.HTTPError as exc:
+                raise BilibiliError(f"解析短链失败：{exc}") from exc
+            # 短链服务偶尔也会挂风控，补一次 buvid Cookie 再试
+            if (
+                response.status_code == 412
+                and not retried
+                and await self._bootstrap_buvid()
+            ):
+                retried = True
+                try:
+                    response = await self._client.get(current, follow_redirects=False)
+                except httpx.HTTPError as exc:
+                    raise BilibiliError(f"解析短链失败：{exc}") from exc
+            status = response.status_code
+            if status in _REDIRECT_STATUSES:
+                location = str(response.headers.get("location") or "").strip()
+                if not location:
+                    raise BilibiliError("短链跳转缺少目标地址")
+                current = urllib.parse.urljoin(current, location)
+                if _looks_like_video_url(current) or not _is_short_link_host(current):
+                    return current
+                continue
+            if status == 412:
+                raise BilibiliError(
+                    "解析短链失败：HTTP 412（风控拦截）：短链服务把这台服务器的请求拦了。"
+                    "可以在插件配置的「账号登录 → B 站 Cookie」里填上浏览器 Cookie 再读一次。"
+                )
+            if status >= 400:
+                raise BilibiliError(f"解析短链失败：HTTP {status}")
+            return str(response.url)
+        raise BilibiliError("短链跳转次数过多")
 
     async def fetch_video_bundle(
         self,

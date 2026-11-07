@@ -5,6 +5,19 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.3.2] - 2026-11-08
+
+修「群里贴 `b23.tv` 短链读视频报 `短链解析失败：HTTP 412`」，并补上短链解析的单元测试。
+
+### 修复
+
+- **短链解析 412**：`resolve_redirect` 以前用 `follow_redirects=True` 一路跟到 `www.bilibili.com/video/BV...`，那个 HTML 页面对机房 IP 常被 B 站 WAF 拦成 HTTP 412，于是短链明明能用却报「解析失败」。现在改成手动跟随跳转、只读响应头里的 `Location`，落到视频页地址就立刻返回，**跳转后的页面一个请求都不发**（拿到 BV 号后走 api 接口，匿名也能读）。
+- **短链服务自身 412**：撞上 412 时先申请一次 buvid3/buvid4 Cookie 再重试；仍失败则抛出带「填 B 站 Cookie」提示的可操作报错，不再只丢一个 `HTTP 412`。
+- 跳转缺少 `Location`、跳转次数超过 5 次、非 4xx/5xx 之外的异常响应都会给出明确的错误文案。
+
+### 新增
+
+- `tests/test_bilibili.py` 新增 5 个用例：只读 `Location` 不发页面请求、多跳短链、412 补 buvid 后重试、412 无 buvid 报可操作错误、短链直接返回 200 的兜底。
 ## [1.3.1] - 2026-11-08
 
 白名单外会话里贴链接既读不到、也看不到原因，补上一个开关和几条能看见的日志。

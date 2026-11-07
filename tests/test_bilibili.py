@@ -417,6 +417,101 @@ class BilibiliClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("412", message)
         self.assertIn("Cookie", message)
 
+    async def test_short_link_reads_location_without_fetching_page(self) -> None:
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(str(request.url))
+            return httpx.Response(
+                302,
+                headers={
+                    "location": "https://www.bilibili.com/video/BV1mv4Y6rESW?p=1&share_source=QQ"
+                },
+            )
+
+        client = self.module.BilibiliClient(transport=httpx.MockTransport(handler))
+        try:
+            final = await client.resolve_redirect("https://b23.tv/AqBKl9R")
+        finally:
+            await client.aclose()
+        self.assertEqual(
+            final, "https://www.bilibili.com/video/BV1mv4Y6rESW?p=1&share_source=QQ"
+        )
+        # 只请求了短链那一次，跳转后的视频页一个请求都没发
+        self.assertEqual(seen, ["https://b23.tv/AqBKl9R"])
+
+    async def test_short_link_follows_multiple_hops(self) -> None:
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            seen.append(url)
+            if url.endswith("/AqBKl9R"):
+                return httpx.Response(302, headers={"location": "https://b23.tv/step2"})
+            return httpx.Response(
+                302, headers={"location": "https://www.bilibili.com/video/BV1mv4Y6rESW"}
+            )
+
+        client = self.module.BilibiliClient(transport=httpx.MockTransport(handler))
+        try:
+            final = await client.resolve_redirect("https://b23.tv/AqBKl9R")
+        finally:
+            await client.aclose()
+        self.assertEqual(final, "https://www.bilibili.com/video/BV1mv4Y6rESW")
+        self.assertEqual(len(seen), 2)
+
+    async def test_short_link_412_bootstraps_buvid_and_retries(self) -> None:
+        state = {"short": 0, "spi": 0, "cookie": ""}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "finger/spi" in url:
+                state["spi"] += 1
+                return httpx.Response(
+                    200, json={"code": 0, "data": {"b_3": "B3", "b_4": "B4"}}
+                )
+            state["short"] += 1
+            if state["short"] == 1:
+                return httpx.Response(412, text="blocked")
+            state["cookie"] = request.headers.get("cookie", "")
+            return httpx.Response(
+                302, headers={"location": "https://www.bilibili.com/video/BV1mv4Y6rESW"}
+            )
+
+        client = self.module.BilibiliClient(transport=httpx.MockTransport(handler))
+        try:
+            final = await client.resolve_redirect("https://b23.tv/AqBKl9R")
+        finally:
+            await client.aclose()
+        self.assertEqual(final, "https://www.bilibili.com/video/BV1mv4Y6rESW")
+        self.assertEqual(state["spi"], 1)
+        self.assertEqual(state["short"], 2)
+        self.assertIn("buvid3=B3", state["cookie"])
+
+    async def test_short_link_412_without_buvid_raises_actionable_error(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(412, text="blocked")
+
+        client = self.module.BilibiliClient(transport=httpx.MockTransport(handler))
+        try:
+            with self.assertRaises(self.module.BilibiliError) as ctx:
+                await client.resolve_redirect("https://b23.tv/AqBKl9R")
+        finally:
+            await client.aclose()
+        message = str(ctx.exception)
+        self.assertIn("短链", message)
+        self.assertIn("412", message)
+
+    async def test_short_link_without_redirect_returns_response_url(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text="<html></html>")
+
+        client = self.module.BilibiliClient(transport=httpx.MockTransport(handler))
+        try:
+            final = await client.resolve_redirect("https://b23.tv/AqBKl9R")
+        finally:
+            await client.aclose()
+        self.assertEqual(final, "https://b23.tv/AqBKl9R")
     async def test_malformed_payload_raises(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"code": 0, "data": None})
