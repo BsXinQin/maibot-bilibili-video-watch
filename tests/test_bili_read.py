@@ -23,8 +23,9 @@ class _Comment:
 
 
 class _Danmaku:
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, progress_ms: int = 0) -> None:
         self.text = text
+        self.progress_ms = progress_ms
 
 
 def sample_view(**overrides):
@@ -189,6 +190,18 @@ class BuildBriefTests(unittest.TestCase):
         self.assertEqual(data["danmaku"], 1)
         self.assertTrue(data["has_subtitle"])
 
+    def test_builds_danmaku_and_subtitle_timelines(self) -> None:
+        bundle = sample_bundle(
+            danmaku=[_Danmaku("前方高能", 61_500), _Danmaku("这里绝了", 65_000)],
+            subtitle_segments=[(0, "第一段"), (95, "第二段")],
+        )
+        brief = READ.build_brief(bundle)
+        self.assertEqual(brief.danmaku, ["前方高能", "这里绝了"])
+        self.assertEqual(brief.danmaku_timeline, [(61, "前方高能"), (65, "这里绝了")])
+        self.assertEqual(brief.subtitle_segments, [(0, "第一段"), (95, "第二段")])
+        self.assertTrue(brief.to_dict()["has_danmaku_timeline"])
+        self.assertTrue(brief.to_dict()["has_subtitle_timeline"])
+
 
 class RenderBriefTests(unittest.TestCase):
     def test_key_lines(self) -> None:
@@ -240,6 +253,47 @@ class RenderBriefTests(unittest.TestCase):
         for item in items:
             self.assertLessEqual(len(item), 24)
 
+    def test_full_detail_renders_subtitle_timeline(self) -> None:
+        bundle = sample_bundle(
+            subtitle_segments=[(0, "第一句"), (30, "第二句"), (95, "第三句")],
+        )
+        text = READ.render_brief(READ.build_brief(bundle), detail="full", max_chars=9000)
+        self.assertIn("深度读：完整字幕时间轴", text)
+        self.assertIn("字幕时间轴（", text)
+        self.assertIn("[00:00] 第一句 第二句", text)
+        self.assertIn("[01:30] 第三句", text)
+        self.assertNotIn("字幕（节选）：", text)
+
+    def test_full_detail_aggregates_danmaku_by_minute(self) -> None:
+        bundle = sample_bundle(
+            danmaku=[
+                _Danmaku("哈哈哈", 5_000),
+                _Danmaku("前方高能", 61_000),
+                _Danmaku("这里绝了", 65_000),
+            ],
+        )
+        text = READ.render_brief(READ.build_brief(bundle), detail="full", max_chars=9000)
+        self.assertIn("弹幕时间线（按分钟", text)
+        self.assertIn("[00:00] 1 条：哈哈哈", text)
+        self.assertIn("[01:00] 2 条：前方高能 / 这里绝了", text)
+        self.assertNotIn("弹幕采样：", text)
+
+    def test_full_detail_lists_all_pages_and_more_comments(self) -> None:
+        pages = [{"part": f"第{i}话", "duration": 60, "cid": i} for i in range(1, 13)]
+        comments = [_Comment(f"评论{i}", f"用户{i}", 100 - i) for i in range(1, 15)]
+        bundle = sample_bundle(view=sample_view(pages=pages), pages=pages, comments=comments)
+        text = READ.render_brief(READ.build_brief(bundle), detail="full", max_chars=9000)
+        self.assertIn("P12 第12话", text)
+        self.assertIn("14. （86 赞）用户14：评论14", text)
+
+    def test_full_detail_falls_back_to_plain_subtitle_and_sampled_danmaku(self) -> None:
+        brief = READ.VideoBrief(
+            title="只有纯文本", bvid="BV1TEST00001", subtitle="纯字幕", danmaku=["弹幕一"]
+        )
+        text = READ.render_brief(brief, detail="full")
+        self.assertIn("字幕（全文）：纯字幕", text)
+        self.assertIn("弹幕采样：弹幕一", text)
+
     def test_without_title_falls_back_to_bvid(self) -> None:
         bundle = sample_bundle(view=sample_view(title="", desc=""))
         text = READ.render_brief(READ.build_brief(bundle))
@@ -288,6 +342,11 @@ class VideoCacheTests(unittest.TestCase):
             base_key,
             READ.cache_key(target, comment_limit=3, danmaku_limit=5, use_subtitle=False),
         )
+        deep_key = READ.cache_key(
+            target, comment_limit=3, danmaku_limit=5, use_subtitle=True, subtitle_chars=12000
+        )
+        self.assertNotEqual(base_key, deep_key)
+        self.assertTrue(deep_key.endswith(".12000"))
 
 
 class ReadBriefTests(unittest.IsolatedAsyncioTestCase):
@@ -377,7 +436,7 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
 
     def _make_plugin(self, **overrides):
         config = {
-            "plugin": {"enabled": True, "config_version": "1.0.1"},
+            "plugin": {"enabled": True, "config_version": "1.1.0"},
             "read": {
                 "enabled": True,
                 "auto_read_enabled": True,
@@ -424,6 +483,15 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
         result = await self.plugin.tool_bili_read(url="", text="帮我看看 BV1TEST00001")
         self.assertTrue(result["success"], result)
         self.assertEqual(result["bvid"], "BV1TEST00001")
+
+    async def test_tool_detail_full_uses_deep_limits(self) -> None:
+        result = await self.plugin.tool_bili_read(url="BV1TEST00001", detail="full")
+        self.assertTrue(result["success"], result)
+        call = self.client.fetch_calls[-1]
+        self.assertEqual(call["comment_limit"], 15)
+        self.assertEqual(call["danmaku_limit"], 120)
+        self.assertEqual(call["subtitle_chars"], 12000)
+        self.assertIn("深度读：完整字幕时间轴", result["content"])
 
     async def test_tool_without_target(self) -> None:
         result = await self.plugin.tool_bili_read(url="")

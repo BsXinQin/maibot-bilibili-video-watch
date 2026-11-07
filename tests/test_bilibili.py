@@ -158,6 +158,26 @@ def _search_item(**overrides):
     return item
 
 
+class DanmakuParseTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = load_submodule("bilibili")
+
+    def test_parses_seconds_progress_into_milliseconds(self) -> None:
+        xml = (
+            '<i><d p="83.500,1,25,16777215,1700000000,0,abc,1">前方高能</d>'
+            '<d p="0.000,1,25,16777215,1700000000,0,abc,2">开场</d></i>'
+        )
+        items = self.module.parse_danmaku_xml(xml)
+        self.assertEqual([item.text for item in items], ["前方高能", "开场"])
+        self.assertEqual([item.progress_ms for item in items], [83500, 0])
+
+    def test_parses_integer_seconds(self) -> None:
+        xml = '<i><d p="12,1,25,16777215,1700000000,0,abc,1">整数秒</d></i>'
+        items = self.module.parse_danmaku_xml(xml)
+        self.assertEqual(items[0].progress_ms, 12000)
+
+
 class BilibiliClientTest(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -209,6 +229,51 @@ class BilibiliClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(videos), 1)
         self.assertEqual(videos[0].source, "ranking:4")
         self.assertTrue(any("nav" in url for url in calls))
+
+    async def test_fetch_subtitle_segments_keeps_timestamps(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "x/player/v2" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "code": 0,
+                        "data": {
+                            "subtitle": {
+                                "subtitles": [
+                                    {"subtitle_url": "https://aisubtitle.hdslb.com/bfs/subtitle/x.json"}
+                                ]
+                            }
+                        },
+                    },
+                )
+            self.assertIn("aisubtitle.hdslb.com", url)
+            return httpx.Response(
+                200,
+                json={
+                    "body": [
+                        {"from": 0.0, "to": 2.5, "content": "第一句"},
+                        {"from": 95.4, "to": 98.0, "content": "第二句"},
+                    ]
+                },
+            )
+
+        client = self.module.BilibiliClient(transport=httpx.MockTransport(handler))
+        try:
+            segments = await client.fetch_subtitle_segments(
+                "BV1xx411c7mD", cid=111, aid=123456, max_chars=100
+            )
+            plain = await client.fetch_subtitle(
+                "BV1xx411c7mD", cid=111, aid=123456, max_chars=100
+            )
+            limited = await client.fetch_subtitle_segments(
+                "BV1xx411c7mD", cid=111, aid=123456, max_chars=1
+            )
+        finally:
+            await client.aclose()
+        self.assertEqual(segments, [(0, "第一句"), (95, "第二句")])
+        self.assertEqual(plain, "第一句 第二句")
+        self.assertEqual(limited, [(0, "第一句")])
 
     async def test_fetch_search_parses_results(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:

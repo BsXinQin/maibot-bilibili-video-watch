@@ -157,6 +157,8 @@ class VideoBrief:
     danmaku: List[str] = field(default_factory=list)
     comments: List[Tuple[str, str, int]] = field(default_factory=list)
     subtitle: str = ""
+    subtitle_segments: List[Tuple[int, str]] = field(default_factory=list)
+    danmaku_timeline: List[Tuple[int, str]] = field(default_factory=list)
     fetched_at: float = field(default_factory=time.time)
 
     @property
@@ -190,6 +192,8 @@ class VideoBrief:
             "comments": len(self.comments),
             "danmaku": len(self.danmaku),
             "has_subtitle": bool(self.subtitle),
+            "has_subtitle_timeline": bool(self.subtitle_segments),
+            "has_danmaku_timeline": bool(self.danmaku_timeline),
             "url": self.url,
         }
 
@@ -226,10 +230,31 @@ def build_brief(bundle: Dict[str, Any], *, target: Optional[VideoTarget] = None)
             continue
         comments.append((text, str(getattr(item, "user", "") or "").strip(), int(getattr(item, "like", 0) or 0)))
     danmaku: List[str] = []
+    danmaku_timeline: List[Tuple[int, str]] = []
     for item in bundle.get("danmaku") or []:
         text = str(getattr(item, "text", "") or "").strip()
-        if text:
-            danmaku.append(text)
+        if not text:
+            continue
+        danmaku.append(text)
+        try:
+            progress = int(getattr(item, "progress_ms", 0) or 0)
+        except (TypeError, ValueError):
+            progress = 0
+        danmaku_timeline.append((max(0, progress) // 1000, text))
+    subtitle_segments: List[Tuple[int, str]] = []
+    for entry in bundle.get("subtitle_segments") or []:
+        try:
+            start, segment_text = entry
+        except (TypeError, ValueError):
+            continue
+        clean = str(segment_text or "").strip()
+        if not clean:
+            continue
+        try:
+            seconds = int(start or 0)
+        except (TypeError, ValueError):
+            seconds = 0
+        subtitle_segments.append((max(0, seconds), clean))
     stats = {
         "play": int(getattr(video, "play", 0) or 0),
         "danmaku": int(getattr(video, "danmaku", 0) or 0),
@@ -252,8 +277,10 @@ def build_brief(bundle: Dict[str, Any], *, target: Optional[VideoTarget] = None)
         page=page,
         stats=stats,
         danmaku=danmaku,
+        danmaku_timeline=danmaku_timeline,
         comments=comments,
         subtitle=str(bundle.get("subtitle") or "").strip(),
+        subtitle_segments=subtitle_segments,
     )
 
 
@@ -266,12 +293,79 @@ def _pubdate_text(timestamp: int) -> str:
         return ""
 
 
-def render_brief(brief: VideoBrief, *, max_chars: int = 3500) -> str:
-    """把 VideoBrief 渲染成模型好读的纯文本（受 max_chars 限制）。"""
+def _mmss(seconds: int) -> str:
+    """把秒数格式化成 mm:ss（超过一小时用 h:mm:ss）。"""
 
+    try:
+        total = max(0, int(seconds))
+    except (TypeError, ValueError):
+        total = 0
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _transcript_lines(segments: List[Tuple[int, str]], *, block_seconds: int = 90) -> List[str]:
+    """把字幕片段按 block_seconds 分块，块首标 [mm:ss]，块内连成一段。"""
+
+    lines: List[str] = []
+    current = -1
+    buffer: List[str] = []
+    for start, text in segments:
+        try:
+            number = max(0, int(start)) // block_seconds
+        except (TypeError, ValueError):
+            number = 0
+        if number != current:
+            if buffer:
+                lines.append(f"[{_mmss(current * block_seconds)}] " + " ".join(buffer))
+            current = number
+            buffer = []
+        if text:
+            buffer.append(text)
+    if buffer:
+        lines.append(f"[{_mmss(current * block_seconds)}] " + " ".join(buffer))
+    return lines
+
+
+def _danmaku_timeline_lines(
+    items: List[Tuple[int, str]], *, block_seconds: int = 60, per_block: int = 3
+) -> List[str]:
+    """弹幕按分钟聚合：每块给条数 + 几条代表弹幕，能看出哪里最热闹。"""
+
+    buckets: Dict[int, List[Tuple[int, str]]] = {}
+    for start, text in items:
+        if not text:
+            continue
+        try:
+            number = max(0, int(start)) // block_seconds
+        except (TypeError, ValueError):
+            number = 0
+        buckets.setdefault(number, []).append((start, text))
+    lines: List[str] = []
+    for number in sorted(buckets):
+        entries = sorted(buckets[number], key=lambda item: item[0])
+        samples = [text[:MAX_DANMAKU_LINE] for _start, text in entries[:per_block]]
+        head = f"[{_mmss(number * block_seconds)}] {len(entries)} 条："
+        lines.append(head + " / ".join(samples))
+    return lines
+
+
+def render_brief(brief: VideoBrief, *, max_chars: int = 3500, detail: str = "brief") -> str:
+    """把 VideoBrief 渲染成模型好读的纯文本（受 max_chars 限制）。
+
+    detail="full" 走「深度读」：完整字幕时间轴、按分钟聚合的弹幕时间线、
+    更多热评、更长的简介与完整分P列表；默认 brief 保持省 token 的老格式。
+    """
+
+    full = str(detail or "").strip().lower() in ("full", "deep", "detail")
     limit = max(500, int(max_chars or 3500))
     lines: List[str] = []
     lines.append(f"【B站视频】{brief.title or brief.bvid or brief.url}")
+    if full:
+        lines.append("深度读：完整字幕时间轴 + 弹幕时间线 + 更多热评")
     meta: List[str] = []
     if brief.owner:
         meta.append(f"UP主 {brief.owner}")
@@ -297,24 +391,42 @@ def render_brief(brief: VideoBrief, *, max_chars: int = 3500) -> str:
         part = brief.part_title or ""
         suffix = f"（当前 P{brief.page}：{part}）" if part else f"（当前 P{brief.page}）"
         lines.append(f"分P：共 {len(brief.pages)} P{suffix}")
-        listing = "、".join(f"P{number} {title}" for number, title, _d in brief.pages[:8])
+        pages_cap = len(brief.pages) if full else 8
+        listing = "、".join(
+            f"P{number} {title}" for number, title, _d in brief.pages[:pages_cap]
+        )
         if listing:
-            lines.append(f"分P列表：{listing}" + ("……" if len(brief.pages) > 8 else ""))
+            lines.append(
+                f"分P列表：{listing}" + ("……" if len(brief.pages) > pages_cap else "")
+            )
     if brief.tags:
         lines.append("标签：" + " / ".join(brief.tags))
     if brief.description:
+        desc_cap = max(MAX_DESC_CHARS, 800) if full else MAX_DESC_CHARS
         desc = brief.description.strip()
-        if len(desc) > MAX_DESC_CHARS:
-            desc = desc[:MAX_DESC_CHARS].rstrip() + "……"
+        if len(desc) > desc_cap:
+            desc = desc[:desc_cap].rstrip() + "……"
         lines.append("简介：" + desc)
-    if brief.subtitle:
+    if full:
+        timeline = _transcript_lines(brief.subtitle_segments) if brief.subtitle_segments else []
+        if timeline:
+            lines.append("字幕时间轴（[分:秒] 该时间点在说什么）：")
+            lines.extend(timeline)
+        elif brief.subtitle:
+            lines.append("字幕（全文）：" + brief.subtitle)
+    elif brief.subtitle:
         lines.append("字幕（节选）：" + brief.subtitle)
     if brief.comments:
         lines.append("热评：")
-        for index, (text, user, like) in enumerate(brief.comments[:10], start=1):
+        comment_cap = 20 if full else 10
+        text_cap = 300 if full else 160
+        for index, (text, user, like) in enumerate(brief.comments[:comment_cap], start=1):
             who = f"{user}：" if user else ""
-            lines.append(f"{index}. （{count_text(like)} 赞）{who}{text[:160]}")
-    if brief.danmaku:
+            lines.append(f"{index}. （{count_text(like)} 赞）{who}{text[:text_cap]}")
+    if full and brief.danmaku_timeline:
+        lines.append("弹幕时间线（按分钟，条数多的是高能段落）：")
+        lines.extend(_danmaku_timeline_lines(brief.danmaku_timeline))
+    elif brief.danmaku:
         sampled = [item[:MAX_DANMAKU_LINE] for item in brief.danmaku[:24]]
         lines.append("弹幕采样：" + " / ".join(sampled))
     lines.append("链接：" + brief.url)
@@ -360,10 +472,20 @@ class VideoCache:
         return len(self._items)
 
 
-def cache_key(target: VideoTarget, *, comment_limit: int, danmaku_limit: int, use_subtitle: bool) -> str:
-    """缓存键带上读取参数，换个参数就重新抓。"""
+def cache_key(
+    target: VideoTarget,
+    *,
+    comment_limit: int,
+    danmaku_limit: int,
+    use_subtitle: bool,
+    subtitle_chars: int = 0,
+) -> str:
+    """缓存键带上读取参数，换个参数就重新抓（深度读与摘要不能共用缓存）。"""
 
-    return f"{target.key}|c{int(comment_limit)}|d{int(danmaku_limit)}|s{1 if use_subtitle else 0}"
+    key = f"{target.key}|c{int(comment_limit)}|d{int(danmaku_limit)}|s{1 if use_subtitle else 0}"
+    if subtitle_chars:
+        key += f".{int(subtitle_chars)}"
+    return key
 
 
 async def read_brief(
@@ -396,6 +518,7 @@ async def read_brief(
         comment_limit=comment_limit,
         danmaku_limit=danmaku_limit,
         use_subtitle=use_subtitle,
+        subtitle_chars=subtitle_chars if use_subtitle else 0,
     )
     if cache is not None:
         cached = cache.get(key)

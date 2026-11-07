@@ -21,7 +21,7 @@ import urllib.parse
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import httpx
 
@@ -132,6 +132,15 @@ def _as_int(value: Any, default: int = 0) -> int:
         if isinstance(value, bool):
             return int(value)
         return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if isinstance(value, bool):
+            return float(int(value))
+        return float(value)
     except (TypeError, ValueError):
         return default
 
@@ -615,7 +624,11 @@ class Comment:
 
 
 def parse_danmaku_xml(xml_text: str) -> List[Danmaku]:
-    """解析弹幕 XML（``<d p="时间,模式,字号,颜色,时间戳,...">文本</d>``）。"""
+    """解析弹幕 XML（d 标签 p 属性为「时间(秒,浮点),模式,字号,颜色,时间戳,...」）。
+
+    list.so 给的是秒（例如 83.500），以前直接 int() 会失败退化成 0，
+    导致弹幕时间轴全挤在 00:00；这里先按浮点解析再换算成毫秒。
+    """
 
     items: List[Danmaku] = []
     if not isinstance(xml_text, str) or not xml_text:
@@ -626,7 +639,10 @@ def parse_danmaku_xml(xml_text: str) -> List[Danmaku]:
         if not text:
             continue
         parts = raw_params.split(",")
-        progress = _as_int(parts[0]) if parts else 0
+        progress = 0
+        if parts:
+            seconds = _as_float(parts[0], 0.0)
+            progress = max(0, int(round(seconds * 1000)))
         mode = _as_int(parts[1], 1) if len(parts) > 1 else 1
         color = _as_int(parts[3], 0xFFFFFF) if len(parts) > 3 else 0xFFFFFF
         ctime = _as_int(parts[4]) if len(parts) > 4 else 0
@@ -774,7 +790,21 @@ class BilibiliDetailMixin:
         return comments
 
     async def fetch_subtitle(self, bvid: str, *, cid: int = 0, aid: int = 0, max_chars: int = 1500) -> str:
-        """读取 CC 字幕文本；没有字幕时返回空字符串。"""
+        """读取 CC 字幕文本（纯文本，不含时间轴）；没有字幕时返回空字符串。"""
+
+        segments = await self.fetch_subtitle_segments(
+            bvid, cid=cid, aid=aid, max_chars=max_chars
+        )
+        return " ".join(text for _start, text in segments)[:max_chars]
+
+    async def fetch_subtitle_segments(
+        self, bvid: str, *, cid: int = 0, aid: int = 0, max_chars: int = 1500
+    ) -> List[Tuple[int, str]]:
+        """读取 CC 字幕，返回 [(起始秒, 文本)]；没有字幕时返回空列表。
+
+        B 站字幕 JSON 的 body 每条都带 from / to（秒，浮点）。纯文本会丢掉
+        「第几分钟在讲什么」，深度读需要时间轴，所以这里单独留一份。
+        """
 
         bvid = (bvid or "").strip()
         if not bvid:
@@ -819,14 +849,20 @@ class BilibiliDetailMixin:
         body = payload.get("body") if isinstance(payload, dict) else None
         if not isinstance(body, list):
             return ""
-        parts: List[str] = []
+        segments: List[Tuple[int, str]] = []
+        used = 0
         for item in body:
-            if isinstance(item, dict) and _as_str(item.get("content")).strip():
-                parts.append(_as_str(item.get("content")).strip())
-            if sum(len(part) for part in parts) >= max_chars:
+            if not isinstance(item, dict):
+                continue
+            content = _as_str(item.get("content")).strip()
+            if not content:
+                continue
+            start = _as_float(item.get("from"), 0.0)
+            segments.append((max(0, int(start)), content))
+            used += len(content)
+            if used >= max_chars:
                 break
-        text = " ".join(parts)
-        return text[:max_chars]
+        return segments
 
     async def resolve_redirect(self, url: str) -> str:
         """跟随 302 短链（b23.tv / bili2233.cn），返回最终地址。"""
@@ -879,6 +915,7 @@ class BilibiliDetailMixin:
         comments: List[Comment] = []
         danmaku: List[Danmaku] = []
         subtitle = ""
+        subtitle_segments: List[Tuple[int, str]] = []
         if comment_limit > 0:
             try:
                 comments = await self.fetch_hot_comments(
@@ -895,11 +932,15 @@ class BilibiliDetailMixin:
                 danmaku = []
         if subtitle_chars > 0:
             try:
-                subtitle = await self.fetch_subtitle(
+                subtitle_segments = await self.fetch_subtitle_segments(
                     resolved_bvid, cid=cid, aid=resolved_aid, max_chars=int(subtitle_chars)
                 )
             except BilibiliError:
-                subtitle = ""
+                subtitle_segments = []
+            if subtitle_segments:
+                subtitle = " ".join(text for _start, text in subtitle_segments)[
+                    : int(subtitle_chars)
+                ]
         return {
             "view": data,
             "pages": pages,
@@ -907,6 +948,7 @@ class BilibiliDetailMixin:
             "comments": comments,
             "danmaku": danmaku,
             "subtitle": subtitle,
+            "subtitle_segments": subtitle_segments,
         }
 
     async def fetch_playurl(self, video: Any, *, cid: int = 0) -> str:

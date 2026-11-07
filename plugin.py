@@ -127,6 +127,20 @@ logger = logging.getLogger("plugin.bilibili_interest_share")
 
 PLUGIN_ID = "github.BsXinQin.bilibili_video_watch"
 _MAX_HISTORY_ITEMS = 8
+
+# 深度读（bili_read 的 detail=full）：字幕全文时间轴 + 弹幕时间线，默认值刻意
+# 比摘要档大，但仍然有上限，避免一次读取把上下文撑爆。
+DEEP_READ_MAX_CHARS = 9000
+DEEP_READ_COMMENT_LIMIT = 15
+DEEP_READ_DANMAKU_LIMIT = 120
+DEEP_READ_SUBTITLE_CHARS = 12000
+
+
+def normalize_detail(value: Any) -> str:
+    """把 detail 参数（full / deep / detail / 带空格等）归一化成 full 或 brief。"""
+
+    text = str(value or "").strip().lower()
+    return "full" if text in ("full", "deep", "detail", "深度", "详细") else "brief"
 # 白名单 stream_id 缓存时间（秒）
 _ALLOWED_STREAMS_TTL_SECONDS = 300.0
 # 自己写完 config.toml 后的保护期（秒）：这段时间内触发的重载不再跑启动轮
@@ -1890,26 +1904,46 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         return cache
 
     async def read_video(
-        self, raw: str, *, max_chars: int = 0, comment_limit: int = -1
+        self, raw: str, *, max_chars: int = 0, comment_limit: int = -1, detail: str = ""
     ) -> Tuple[VideoBrief, str]:
-        """读一条视频，返回（结构化资料, 给模型看的文本）。"""
+        """读一条视频，返回（结构化资料, 给模型看的文本）。
+
+        detail="full" 时走深度读：完整字幕时间轴、按分钟聚合的弹幕时间线、
+        更多热评，正文上限提到 DEEP_READ_MAX_CHARS。
+        """
 
         target = parse_target(raw)
         if target is None:
             raise BiliReadError("没认出 B 站链接或 BV 号")
 
         config = self.config
+        deep = normalize_detail(detail) == "full"
+        if deep:
+            resolved_comment_limit = (
+                int(comment_limit) if comment_limit >= 0 else DEEP_READ_COMMENT_LIMIT
+            )
+            resolved_danmaku_limit = DEEP_READ_DANMAKU_LIMIT
+            resolved_subtitle_chars = DEEP_READ_SUBTITLE_CHARS
+            resolved_max_chars = int(max_chars or DEEP_READ_MAX_CHARS)
+        else:
+            resolved_comment_limit = (
+                int(comment_limit) if comment_limit >= 0 else int(config.read.comment_limit)
+            )
+            resolved_danmaku_limit = int(config.read.danmaku_limit)
+            resolved_subtitle_chars = 1200  # 与 read_brief 的默认值保持一致
+            resolved_max_chars = int(max_chars or config.read.max_chars)
         brief = await read_brief(
             self._ensure_client(),
             target,
-            comment_limit=(
-                int(comment_limit) if comment_limit >= 0 else int(config.read.comment_limit)
-            ),
-            danmaku_limit=int(config.read.danmaku_limit),
+            comment_limit=resolved_comment_limit,
+            danmaku_limit=resolved_danmaku_limit,
             use_subtitle=bool(config.read.use_subtitle),
+            subtitle_chars=resolved_subtitle_chars,
             cache=self._ensure_read_cache(),
         )
-        return brief, render_brief(brief, max_chars=int(max_chars or config.read.max_chars))
+        return brief, render_brief(
+            brief, max_chars=resolved_max_chars, detail="full" if deep else "brief"
+        )
 
     @Tool(
         "bili_read",
@@ -1919,6 +1953,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             "「值不值得看」时，先调用它拿到内容，不要凭标题猜。"
             "它一次调用通常 1 秒内返回，在当前对话里直接调用即可，不需要交给子代理；"
             "如果上下文里已经有这个视频的读取结果，就不用重复读。"
+            "想看细节（逐段讲了什么、哪里有高能）时传 detail=full，会返回字幕时间轴和弹幕时间线。"
         ),
         parameters=[
             ToolParameterInfo(
@@ -1926,7 +1961,17 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 param_type=ToolParamType.STRING,
                 description="B 站视频链接、BV 号（如 BV1xx411c7mD）或 av 号",
                 required=True,
-            )
+            ),
+            ToolParameterInfo(
+                name="detail",
+                param_type=ToolParamType.STRING,
+                description=(
+                    "读取深度：brief（默认，快速摘要，省 token）/ full（深度读："
+                    "完整字幕时间轴、弹幕时间线、更多热评，正文更长）。"
+                    "要细看视频内容、做学习笔记、或摘要里明显缺细节时传 full。"
+                ),
+                required=False,
+            ),
         ],
         chat_scope="all",
         # 让 Planner 直接看见这个工具（默认 deferred 要先 tool_search，模型就会
@@ -1949,8 +1994,9 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 return {"success": False, "error": "读视频功能已在插件配置的「读视频」里关闭"}
         except Exception:  # noqa: BLE001 - 配置还没注入时按启用处理
             pass
+        detail = normalize_detail(kwargs.get("detail"))
         try:
-            brief, content = await self.read_video(target_text)
+            brief, content = await self.read_video(target_text, detail=detail)
         except asyncio.CancelledError:
             raise
         except BiliReadError as exc:
