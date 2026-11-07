@@ -1,14 +1,16 @@
 """沁の刷B站视频插件。
 
-按白名单聊天流的用户兴趣，定时刷 B 站并挑视频分享。v0.2 相比 v0.1 增加了：
+按白名单聊天流的用户兴趣，定时刷 B 站并挑视频分享，也能读群友贴的视频：
 
 - 抽帧看画面（视觉模型）+ 弹幕 / 热门评论 / CC 字幕一起参与判断；
-- LLM 语义判断（默认走 ``planner`` 任务），生成「内容总结 + 看点」；
+- LLM 语义判断，按人设口吻生成简短介绍；
 - 排除主流官方物料，按「新鲜资讯 / 社区创作 / 玩家投稿 / 外网搬运」分类抓取；
 - 自动分享与主动搜索各自独立冷却；
-- 已刷名单：名单内视频不再自动分享，但可被要求重发（复用缓存的总结）；
-- ``/赤石视频`` 指令单独分享抽象整活类视频。
+- 已刷名单：名单内视频不再自动分享，但可被要求重发（复用缓存的介绍）；
+- ``bili_read`` 工具：别人贴链接自动 brief 快速读，@ 机器人或说「详细看看」时 full 深度读并抽帧；
+- ``bili_search`` / ``bili_shiwei`` 工具：主动搜索分享、赤石整活视频。
 
+聊天指令已全部移除（平台会拦截 `/` 开头的消息），只通过工具由模型调用。
 宿主能力都通过 ``self.ctx`` 调用，模型由 ``model_config.toml`` 的任务配置决定。
 """
 
@@ -24,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from maibot_sdk import Command, HookHandler, MaiBotPlugin, Tool
+from maibot_sdk import HookHandler, MaiBotPlugin, Tool
 
 try:  # 文档推荐的导入路径（HookMode / ToolParameterInfo 都定义在 types 里）
     from maibot_sdk.types import HookMode, ToolParameterInfo, ToolParamType
@@ -33,15 +35,7 @@ except ImportError:  # 兼容把 HookMode 只在 components 里导出的旧版�
     from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
 try:  # 宿主正常按包加载插件
-    from .bilibili import BilibiliClient, BilibiliError, Video, merge_videos
-    from .bilibili_login import (
-        LoginState,
-        QrLoginError,
-        create_qrcode,
-        fetch_login_state,
-        poll_qrcode,
-        render_qrcode_png,
-    )
+    from .bilibili import BilibiliClient, BilibiliError, NAV_URL, Video, merge_videos
     from .bili_read import (
         BiliReadError,
         VideoBrief,
@@ -58,7 +52,6 @@ try:  # 宿主正常按包加载插件
         find_config_path,
         should_write_back,
         stream_identity,
-        update_cookie,
         update_persona_seed_interests,
         update_stream_auto_interests,
     )
@@ -81,15 +74,7 @@ except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回
     _HERE = _os.path.dirname(_os.path.abspath(__file__))
     if _HERE not in _sys.path:
         _sys.path.insert(0, _HERE)
-    from bilibili import BilibiliClient, BilibiliError, Video, merge_videos
-    from bilibili_login import (
-        LoginState,
-        QrLoginError,
-        create_qrcode,
-        fetch_login_state,
-        poll_qrcode,
-        render_qrcode_png,
-    )
+    from bilibili import BilibiliClient, BilibiliError, NAV_URL, Video, merge_videos
     from bili_read import (
         BiliReadError,
         VideoBrief,
@@ -106,7 +91,6 @@ except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回
         find_config_path,
         should_write_back,
         stream_identity,
-        update_cookie,
         update_persona_seed_interests,
         update_stream_auto_interests,
     )
@@ -225,6 +209,38 @@ def _message_text(message: Dict[str, Any]) -> str:
             elif isinstance(item.get("text"), str):
                 parts.append(item["text"])
     return "".join(parts).strip()
+
+
+def _message_mentions_me(message: Dict[str, Any]) -> bool:
+    """判断这条消息是不是在 @ 机器人（宿主字段或 OneBot at 段）。"""
+
+    if not isinstance(message, dict):
+        return False
+    for key in ("at_me", "is_at_me", "is_at", "mentioned"):
+        if message.get(key) is True:
+            return True
+    raw = message.get("raw_message")
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            segment_type = str(item.get("type") or "").lower()
+            if segment_type in {"at", "mention"}:
+                return True
+    return False
+
+
+def wants_full_read(
+    message: Dict[str, Any], text: str, keywords: Sequence[str]
+) -> bool:
+    """判断这条消息要不要深度读（@ 机器人，或说了「详细看看」这类话）。"""
+
+    if _message_mentions_me(message):
+        return True
+    body = (text or "").lower()
+    if not body:
+        return False
+    return any(str(word).strip() and str(word).strip().lower() in body for word in keywords)
 
 
 def _stream_id_of(stream: Any) -> str:
@@ -367,10 +383,8 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         self.last_round: Optional[Dict[str, Any]] = None
         self.last_round_at: Optional[float] = None
         self.next_run_at: Optional[float] = None
-        # 扫码登录会话（同一时间只允许一个）
-        self._login_lock = asyncio.Lock()
-        self._login_task: Optional[asyncio.Task] = None
-        self._login_state: Optional[LoginState] = None
+        # 启动时检查到的 B 站昵称（没有 Cookie 或校验失败时为空）
+        self._login_uname: str = ""
         # 读视频（bili_read）：按视频缓存的解析结果 + 自动读的防重复表
         self._read_cache: Optional[VideoCache] = None
         self._auto_read_seen: Dict[str, float] = {}
@@ -444,7 +458,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             )
 
     async def _check_login_on_start(self) -> None:
-        """启动时检查一次登录状态，Cookie 失效就提示用户去扫码。"""
+        """启动时用 nav 接口检查一次 Cookie，失效就在日志里提示手动重填。"""
 
         if self._client is None:
             return
@@ -453,19 +467,21 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             logger.info("沁の刷B站视频：未配置 B 站 Cookie，以匿名方式访问（读不到字幕、排行榜易被风控）")
             return
         try:
-            state = await fetch_login_state(
-                self._client.http, cookie, user_agent=self.config.advanced.user_agent
-            )
+            response = await self._client.http.get(NAV_URL)
+            payload = response.json() if response.status_code == 200 else {}
         except Exception as exc:  # noqa: BLE001 - 启动检查失败不影响运行
             logger.debug("检查 B 站登录状态失败：%s", exc)
             return
-        if state.status == "success":
-            who = state.uname or state.mid or "已登录"
-            logger.info("沁の刷B站视频：B 站登录状态正常（%s）", who)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(data, dict) and data.get("isLogin"):
+            self._login_uname = str(data.get("uname") or "").strip()
+            logger.info(
+                "沁の刷B站视频：B 站登录状态正常（%s）", self._login_uname or "已登录"
+            )
         else:
+            self._login_uname = ""
             logger.warning(
-                "沁の刷B站视频：B 站 Cookie 可能已失效（%s），可以在聊天里发 /扫码登录 重新登录",
-                state.message,
+                "沁の刷B站视频：B 站 Cookie 可能已失效，请在插件配置的「账号登录 → B 站 Cookie」里重新粘贴"
             )
 
     async def on_unload(self) -> None:
@@ -1581,58 +1597,6 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             return True
         return bool(result)
 
-    async def _send_image(self, stream_id: str, png_bytes: bytes) -> bool:
-        """发送一张 PNG 图片（base64 交给宿主的 ``send.image``）。
-
-        和文本一样，失败时会换用同群的其他候选会话重试。
-        """
-
-        if not png_bytes or not stream_id:
-            return False
-        import base64
-
-        payload = base64.b64encode(png_bytes).decode("ascii")
-        primary = self._stream_overrides.get(stream_id, stream_id)
-        if await self._send_image_once(primary, payload):
-            return True
-        for alternative in self._stream_fallbacks.get(stream_id, ()) or ():
-            if alternative == primary:
-                continue
-            if await self._send_image_once(alternative, payload):
-                self._stream_overrides[stream_id] = alternative
-                return True
-        return False
-
-    async def _send_image_once(self, stream_id: str, image_base64: str) -> bool:
-        """向指定会话发送一张图片（原始 base64，不带 data URI 前缀）。"""
-
-        if not image_base64 or not stream_id:
-            return False
-        send = getattr(self.ctx, "send", None)
-        if send is None:
-            return False
-        sender = getattr(send, "image", None)
-        if not callable(sender):
-            logger.debug("宿主没有 send.image 能力，无法发送图片")
-            return False
-        try:
-            result = await sender(image_base64, stream_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("发送图片失败（%s）：%s", stream_id, exc)
-            return False
-        if isinstance(result, dict):
-            if "sent" in result:
-                return bool(result.get("sent"))
-            if "success" in result:
-                if not result.get("success"):
-                    logger.warning(
-                        "发送图片失败（%s）：%s", stream_id, result.get("error") or result
-                    )
-                    return False
-                return True
-            return True
-        return bool(result)
-
     async def _send_parts(
         self,
         stream_id: str,
@@ -1703,7 +1667,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             return {"ok": False, "reason": "disabled"}
         if self._client is None or self._store is None:
             return {"ok": False, "reason": "not_loaded"}
-        # 主动搜索也只在白名单会话里生效，避免任意群里一条指令就把视频发过去
+        # 主动搜索也只在白名单会话里生效，避免任意群里一句话就让模型把视频发过去
         allowed = await self._ensure_allowed_streams()
         if stream_id not in allowed:
             logger.debug("会话 %s 不在白名单，忽略主动搜索请求", stream_id)
@@ -2013,35 +1977,9 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             "url": brief.url,
         }
 
-    @Command(
-        "bili_read_cmd",
-        description="读一个 B 站视频，把内容摘要发到当前会话",
-        pattern=r"^/读视频\s*(?P<target>.+)$",
-        aliases=["/bili-read"],
-    )
-    async def cmd_read(self, **kwargs: Any) -> Tuple[bool, str, int]:
-        stream_id = _stream_id_of(kwargs)
-        target = self._command_arg(kwargs, "target")
-        if not target:
-            text = "用法：/读视频 <B站链接或BV号>"
-        else:
-            try:
-                brief, content = await self.read_video(target, max_chars=1200, comment_limit=3)
-            except asyncio.CancelledError:
-                raise
-            except BiliReadError as exc:
-                text = f"没读到：{exc}"
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("读视频失败：%s", exc, exc_info=self._debug_enabled())
-                text = f"读视频失败：{exc}"
-            else:
-                text = content
-                logger.info("读视频指令读取成功：%s（%s）", brief.title, brief.bvid)
-        if stream_id:
-            await self._send_text(stream_id, text)
-        return True, text, 2
-
-    async def _append_read_context(self, stream_id: str, brief: VideoBrief, text: str) -> bool:
+    async def _append_read_context(
+        self, stream_id: str, brief: VideoBrief, text: str, *, deep: bool = False
+    ) -> bool:
         """把读到的视频内容写进会话上下文，让麦麦接下来的回复能自然用上。"""
 
         try:
@@ -2051,8 +1989,9 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         context = getattr(maisaka, "context", None)
         if context is None:
             return False
+        depth = "深度读（含字幕时间轴、弹幕时间线和画面描述）" if deep else "快速读"
         content = (
-            f"（下面是我刚读到的 B 站视频内容，已经放进上下文，可以自然地聊起：{brief.title}；"
+            f"（下面是我刚{depth}到的 B 站视频内容，已经放进上下文，可以自然地聊起：{brief.title}；"
             f"直接用这份内容回答即可，不用再调用 bili_read）\n{text}"
         )
         try:
@@ -2089,6 +2028,8 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             logger.debug("会话 %s 不在白名单，跳过自动读视频", stream_id)
             return
 
+        deep = wants_full_read(message, text, config.read.full_trigger_keywords)
+        mode = "full" if deep else "brief"
         now = time.time()
         window = max(60.0, float(config.read.cache_seconds))
         if len(self._auto_read_seen) > 500:
@@ -2100,23 +2041,72 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             target = parse_target(item)
             if target is None:
                 continue
-            seen_key = f"{stream_id}|{target.key}"
+            seen_key = f"{stream_id}|{target.key}|{mode}"
             if now - self._auto_read_seen.get(seen_key, 0.0) < window:
-                logger.debug("视频 %s 刚读过，跳过", target.key)
+                logger.debug("视频 %s 刚%s读过，跳过", target.key, "深度" if deep else "快速")
                 continue
             try:
-                brief, brief_text = await asyncio.wait_for(self.read_video(item), timeout=20.0)
+                if deep:
+                    brief, brief_text = await asyncio.wait_for(
+                        self.read_video(item, detail="full"), timeout=90.0
+                    )
+                    vision_text = await self._describe_video_frames(brief)
+                    if vision_text:
+                        brief_text = (
+                            f"{brief_text}\n\n【画面描述（抽帧）】\n{vision_text}"
+                        )
+                else:
+                    brief, brief_text = await asyncio.wait_for(self.read_video(item), timeout=20.0)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - 自动读失败只是一条日志
                 logger.debug("自动读视频失败（%s）：%s", item, exc)
                 continue
             self._auto_read_seen[seen_key] = now
-            if await self._append_read_context(stream_id, brief, brief_text):
+            if await self._append_read_context(stream_id, brief, brief_text, deep=deep):
                 appended += 1
-                logger.info("自动读取 B 站视频：%s（%s）", brief.title, brief.bvid)
+                logger.info(
+                    "自动%s读取 B 站视频：%s（%s）",
+                    "深度" if deep else "快速",
+                    brief.title,
+                    brief.bvid,
+                )
         if appended:
             logger.debug("会话 %s 本轮自动读取 %s 个视频", stream_id, appended)
+
+    async def _describe_video_frames(self, brief: VideoBrief) -> str:
+        """full 模式下抽几帧交给视觉模型，返回画面描述（任何一步失败都返回空串）。"""
+
+        config = self.config
+        if not config.read.full_vision_enabled or not config.vision.enabled:
+            return ""
+        judge = self._judge
+        if judge is None or not getattr(judge, "available", False):
+            logger.debug("视觉模型不可用，跳过 full 模式的画面描述")
+            return ""
+        video = Video(
+            bvid=brief.bvid,
+            aid=brief.aid,
+            title=brief.title,
+            owner=brief.owner,
+            partition=brief.partition,
+            duration=brief.duration,
+            pubdate=brief.pubdate,
+        )
+        frames = await self._capture_frames(video)
+        if not frames:
+            logger.debug("没有抽到画面，full 模式只返回文字内容")
+            return ""
+        try:
+            return await asyncio.wait_for(
+                judge.describe_frames(video, frames),
+                timeout=float(config.vision.timeout_seconds),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 画面描述失败不影响文字内容
+            logger.debug("画面描述失败 %s：%s", brief.bvid, exc)
+            return ""
 
     # -- 重发（聊天自然语言触发） --------------------------------------
 
@@ -2190,392 +2180,111 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             await self._send_text(stream_id, "好嘞，再发一遍～")
         logger.info("按用户要求重发了 %s（%s）", video.bvid, video.title)
 
-    @Command(
-        "bili_login",
-        description="扫码登录 B 站（仅私聊可用；手机扫码后自动保存 Cookie）",
-        pattern=r"^/扫码登录\s*$",
-        aliases=["/bili-login", "/扫码登陆"],
-    )
-    async def cmd_login(self, **kwargs: Any) -> Tuple[bool, str, int]:
-        # 扫码登录只在私聊里开放：群里发二维码容易被别人扫走，也容易刷屏
-        group_id = str(kwargs.get("group_id") or "").strip()
-        if group_id:
-            text = "扫码登录只能在私聊里用哦，群里发二维码不安全。私聊我发 /扫码登录 就行。"
-            return True, text, 2
+    # -- 工具：主动搜索 / 赤石（聊天指令会被平台拦截，改由模型调用工具） --
+
+    def _stream_from_tool_kwargs(self, kwargs: Dict[str, Any]) -> str:
+        """工具调用里取当前聊天流：优先顶层 stream_id，其次宿主的 session 对象。"""
+
         stream_id = _stream_id_of(kwargs)
-        if self._client is None:
-            text = "插件还没加载完成，稍等一下再试。"
-            if stream_id:
-                await self._send_text(stream_id, text)
-            return True, text, 2
-        if self._login_task is not None and not self._login_task.done():
-            text = "已经有一个扫码登录在进行中，先看看刚才那条消息吧。"
-            if stream_id:
-                await self._send_text(stream_id, text)
-            return True, text, 2
-        if not stream_id:
-            text = "扫码登录需要在一个聊天里发起。"
-            return True, text, 2
-        text = "正在生成登录二维码…"
-        self._login_task = asyncio.create_task(
-            self._run_qr_login(stream_id), name="bilibili-interest-share-qr-login"
-        )
-        return True, text, 2
-
-    async def _run_qr_login(self, stream_id: str) -> None:
-        """生成二维码 → 发图 → 轮询到成功或超时。"""
-
-        config = self.config
-        client = self._client
-        if client is None:
-            return
-        timeout = float(config.account.qrcode_timeout_seconds)
-        try:
-            session = await create_qrcode(
-                client.http, user_agent=config.advanced.user_agent
-            )
-        except QrLoginError as exc:
-            await self._send_text(stream_id, f"生成登录二维码失败：{exc}")
-            return
-        try:
-            png = render_qrcode_png(session.url)
-        except QrLoginError as exc:
-            await self._send_text(
-                stream_id,
-                f"二维码图片生成失败（{exc}），请直接打开这个链接登录：{session.url}",
-            )
-            return
-        sent = await self._send_image(stream_id, png)
-        if not sent:
-            await self._send_text(
-                stream_id,
-                f"二维码图片发送失败，请直接打开这个链接登录：{session.url}",
-            )
-            return
-        await self._send_text(
-            stream_id,
-            f"请用 B 站手机客户端扫码登录，{int(timeout)} 秒内有效。"
-            "登录成功后会自动保存 Cookie，不用手动复制。",
-        )
-
-        deadline = time.time() + timeout
-        last_status = "waiting"
-        while time.time() < deadline:
-            await asyncio.sleep(2.0)
-            state = await poll_qrcode(
-                client.http, session.qrcode_key, user_agent=config.advanced.user_agent
-            )
-            self._login_state = state
-            if state.status == "success":
-                await self._apply_login_cookie(state.cookie, stream_id)
-                return
-            if state.status == "expired":
-                await self._send_text(stream_id, "二维码已失效，重新发一次 /扫码登录 吧。")
-                return
-            if state.status == "scanned" and last_status != "scanned":
-                last_status = "scanned"
-                await self._send_text(stream_id, "已扫码，请在手机上点一下确认登录。")
-            elif state.status == "error":
-                logger.debug("轮询登录状态出错：%s", state.message)
-        await self._send_text(stream_id, "等待扫码超时了，需要的话再发一次 /扫码登录。")
-
-    async def _apply_login_cookie(self, cookie: str, stream_id: str) -> None:
-        """扫码成功：保存 Cookie 到配置、立刻生效、回报用户。"""
-
-        cookie = (cookie or "").strip()
-        if not cookie:
-            await self._send_text(stream_id, "登录成功了，但没取到 Cookie，请再试一次。")
-            return
-        if self._client is not None:
-            self._client.set_cookie(cookie)
-        # 同步内存里的配置（宿主不会因为 config.toml 变化而重新加载）
-        try:
-            self.config.account.cookie = cookie
-        except Exception:  # noqa: BLE001
-            pass
-        saved = update_cookie(self._config_file(), cookie)
-        # 校验一下并拿到昵称
-        who = ""
-        if self._client is not None:
-            try:
-                state = await fetch_login_state(
-                    self._client.http, cookie, user_agent=self.config.advanced.user_agent
-                )
-                if state.status == "success":
-                    who = state.uname or state.mid or ""
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("校验登录状态失败：%s", exc)
-        name_part = f"（{who}）" if who else ""
-        if saved:
-            text = f"登录成功{name_part}，Cookie 已经保存到配置里了，之后就能读字幕、排行榜也更稳。"
-        else:
-            text = (
-                f"登录成功{name_part}，但 Cookie 写入配置文件失败，"
-                "请把日志里的 Cookie 手动填到「账号登录」里。"
-            )
-            logger.warning("B 站 Cookie（请手动填入配置）：%s", cookie)
-        await self._send_text(stream_id, text)
-        logger.info("B 站扫码登录成功%s", name_part)
-
-    # -- 指令 ----------------------------------------------------------
-
-    @Command(
-        "bili_share",
-        description="立即跑一轮 B 站分享",
-        pattern=r"^/bili-share",
-        aliases=["/b站分享"],
-    )
-    async def cmd_share(self, **kwargs: Any) -> Tuple[bool, str, int]:
-        stream_id = _stream_id_of(kwargs)
-        summary = await self.run_round(reason="manual", manual=True)
-        text = self._format_summary(summary)
         if stream_id:
-            await self._send_text(stream_id, text)
-        return True, text, 2
-
-    @Command("bili_status", description="查看 B 站分享插件状态", pattern=r"^/bili-status")
-    async def cmd_status(self, **kwargs: Any) -> Tuple[bool, str, int]:
-        stream_id = _stream_id_of(kwargs)
-        text = self._format_status()
-        if stream_id:
-            await self._send_text(stream_id, text)
-        return True, text, 2
-
-    @Command(
-        "bili_test",
-        description="预览本轮候选与打分（只预览，不分享视频）",
-        pattern=r"^/bili-test",
-    )
-    async def cmd_test(self, **kwargs: Any) -> Tuple[bool, str, int]:
-        stream_id = _stream_id_of(kwargs)
-        text = await self._format_preview()
-        if stream_id:
-            await self._send_text(stream_id, text)
-        return True, text, 2
-
-    @Command(
-        "bili_search",
-        description="主动搜索并分享指定关键词的视频",
-        pattern=r"^/bili-search\s*(?P<query>.*)$",
-        aliases=["/b站搜索"],
-    )
-    async def cmd_search(self, **kwargs: Any) -> Tuple[bool, str, int]:
-        stream_id = _stream_id_of(kwargs)
-        query = self._command_arg(kwargs, "query")
-        if not query:
-            text = "用法：/bili-search 关键词"
-            if stream_id:
-                await self._send_text(stream_id, text)
-            return True, text, 2
-        result = await self.search_and_share(query, stream_id)
-        if result.get("ok"):
-            text = f"已搜索并分享：{query}（{len(result.get('shared') or [])} 个）"
-        elif result.get("reason") == "not_allowed":
-            text = "这个会话不在插件白名单里，换一个配置里列出的群再试吧"
-        elif result.get("reason") == "cooldown":
-            text = f"主动搜索还在冷却中，请 {int(result.get('remaining') or 0)} 秒后再试"
-        else:
-            text = f"主动搜索没有成功：{result.get('reason')}"
-        if stream_id:
-            await self._send_text(stream_id, text)
-        return True, text, 2
-
-    @Command(
-        "shiwei_video",
-        description="抓一个抽象整活类视频分享（不带总结）",
-        pattern=r"^/赤石视频",
-    )
-    async def cmd_shiwei(self, **kwargs: Any) -> Tuple[bool, str, int]:
-        stream_id = _stream_id_of(kwargs)
-        result = await self.share_shiwei(stream_id)
-        if result.get("ok"):
-            text = "赤石视频已送达。"
-        elif result.get("reason") == "not_allowed":
-            text = "这个会话不在插件白名单里，换一个配置里列出的群再试吧"
-        elif result.get("reason") == "cooldown":
-            text = f"赤石视频还在冷却中，请 {int(result.get('remaining') or 0)} 秒后再试"
-        else:
-            text = f"这次没捞到合适的赤石视频（{result.get('reason')}）"
-        if stream_id:
-            await self._send_text(stream_id, text)
-        return True, text, 2
-
-    # -- 文本输出 ------------------------------------------------------
-
-    def _command_arg(self, kwargs: Dict[str, Any], name: str) -> str:
-        groups = kwargs.get("matched_groups")
-        if isinstance(groups, dict):
-            value = groups.get(name)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        for key in ("query", "text", "raw_message"):
+            return stream_id
+        for key in ("session", "message", "event"):
             value = kwargs.get(key)
-            if not isinstance(value, str) or not value.strip():
-                continue
-            value = value.strip()
-            if value.startswith("/"):
-                # 没匹配到参数时会回退到整条指令原文，把指令本身剥掉，别拿「/bili-search」当搜索词
-                parts = value.split(None, 1)
-                value = parts[1].strip() if len(parts) > 1 else ""
-                if not value:
-                    continue
-            return value
+            if isinstance(value, dict):
+                found = _stream_id_of(value) or _stream_id_of(value.get("message_info") or {})
+                if found:
+                    return found
         return ""
 
-    def _format_summary(self, summary: Dict[str, Any]) -> str:
-        if not summary.get("ok"):
-            return f"B 站分享未能执行：{summary.get('skipped') or summary.get('reason') or '未知原因'}"
-        skipped = summary.get("skipped")
-        if skipped == "outside_active_hours":
-            return "当前不在允许分享的时间段内。"
-        if skipped == "no_targets":
-            return "没有启用中的白名单会话，请先在配置里添加 [[streams]]。"
-        if skipped == "no_stream":
-            return "白名单会话解析失败，请检查 group_id / stream_id 配置。"
-        return (
-            f"沁の刷B站视频完成：抓取 {summary.get('fetched', 0)} 个候选，"
-            f"分享 {summary.get('shared', 0)} 个（会话 {summary.get('target_count', 0)} 个）。"
-        )
-
-    def _format_status(self) -> str:
-        config = self.config
-        lines = [
-            "【沁の刷B站视频】",
-            f"启用：{'是' if config.plugin.enabled else '否'}",
-            f"自动频率：每 {config.schedule.interval_minutes} 分钟（抖动 ±{config.schedule.jitter_seconds} 秒）",
-            f"活跃时段：{config.schedule.active_hours or '全天'}",
-            f"主动搜索冷却：{config.schedule.search_cooldown_seconds} 秒",
-            f"白名单会话：{len([item for item in config.streams if item.enabled])} 个",
-            f"LLM 判断：{'开' if config.interest.use_llm_judge else '关'}（{config.interest.llm_task_name}）",
-            f"抽帧识图：{'开' if config.vision.enabled else '关'}（{config.vision.task_name}）",
-            self._account_desc(),
-        ]
-        persona_desc = self._persona_desc()
-        if persona_desc:
-            lines.append(persona_desc)
-        interest_lines = self._interest_desc()
-        if interest_lines:
-            lines.extend(interest_lines)
-        if self.next_run_at:
-            remain = max(0, int(self.next_run_at - time.time()))
-            lines.append(f"下一轮：约 {remain // 60} 分 {remain % 60} 秒后")
-        if self._store is not None:
-            stats = self._store.stats()
-            lines.append(
-                f"已记录视频：{stats.get('seen_count', 0)} 个，累计分享：{stats.get('total_shared', 0)} 次"
-            )
-        return "\n".join(lines)
-
-    def _account_desc(self) -> str:
-        """状态里显示 B 站登录情况。"""
-
-        cookie = self._effective_cookie()
-        if not cookie:
-            return "B 站登录：未登录（匿名访问，读不到字幕；发 /扫码登录 可以扫码登录）"
-        state = self._login_state
-        if state is not None and state.status == "success":
-            who = state.uname or state.mid
-            return f"B 站登录：已登录{f'（{who}）' if who else ''}"
-        return "B 站登录：已配置 Cookie（发 /扫码登录 可重新登录）"
-
-    def _interest_desc(self) -> List[str]:
-        """状态里列出各白名单会话的兴趣，方便确认自动提取有没有生效。"""
-
-        config = self.config
-        targets = [item for item in config.streams if item.enabled]
-        if not targets:
-            return []
-        lines: List[str] = []
-        for target in targets[:5]:
-            label = getattr(target, "name", "") or getattr(target, "group_id", "") or getattr(
-                target, "user_id", ""
-            ) or getattr(target, "stream_id", "")
-            manual = [str(item).strip() for item in (target.interests or []) if str(item or "").strip()]
-            auto = [str(item).strip() for item in (getattr(target, "auto_interests", None) or []) if str(item or "").strip()]
-            parts = [f"【{label or '未命名会话'}】"]
-            if manual:
-                parts.append(f"手写：{'、'.join(manual)}")
-            if auto:
-                parts.append(f"自动：{'、'.join(auto)}")
-            if not manual and not auto:
-                parts.append("暂无兴趣（下一轮会按人设生成初始兴趣）")
-            if self._store is not None:
-                key = stream_identity(target)
-                last_written = self._store.get_auto_interests(key) if key else None
-                if auto:
-                    parts.append(describe_write_back_state(auto, last_written))
-            lines.append("；".join(parts))
-        if len(targets) > 5:
-            lines.append(f"…另有 {len(targets) - 5} 个会话未显示")
-        return lines
-
-    def _persona_desc(self) -> str:
-        """状态里显示当前人设来源。"""
-
-        provider = self._persona
-        if provider is None:
-            return ""
-        if not getattr(provider, "enabled", True):
-            return "人设语气：已关闭（分享文案用中性语气）"
-        try:
-            persona = provider.get()
-        except Exception:  # noqa: BLE001
-            return ""
-        if persona.is_empty:
-            return "人设语气：未读到人设（分享文案用中性语气）"
-        source = "手动配置" if persona.source == "override" else "宿主配置"
-        name = persona.name or "（未命名）"
-        return f"人设语气：{name}（来自{source}）"
-
-    async def _format_preview(self) -> str:
-        config = self.config
-        if self._client is None:
-            return "插件尚未加载完成。"
-        targets = [item for item in config.streams if item.enabled]
-        if not targets:
-            return "没有启用中的白名单会话。"
-        target = targets[0]
-        stream_id = await self._resolve_stream(target)
+    @Tool(
+        "bili_search",
+        description=(
+            "按关键词搜索 B 站视频，并把最相关的一条分享到当前聊天。"
+            "用户说「搜点 XX 视频」「找个 XX 的 B 站视频发群里」时用它；"
+            "工具会自己完成搜索、过滤、打分和发送，不需要再调用 send。"
+            "只能在插件白名单聊天流里使用。"
+        ),
+        parameters=[
+            ToolParameterInfo(
+                name="query",
+                param_type=ToolParamType.STRING,
+                description="搜索关键词（例如「原神 新版本」）",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="count",
+                param_type=ToolParamType.INTEGER,
+                description="分享几条（默认 1，最多 3）",
+                required=False,
+            ),
+        ],
+        chat_scope="all",
+        visibility="visible",
+        core_tool=True,
+    )
+    async def tool_bili_search(
+        self, query: str = "", count: int = 1, **kwargs: Any
+    ) -> Dict[str, Any]:
+        stream_id = self._stream_from_tool_kwargs(kwargs)
         if not stream_id:
-            return "白名单会话解析失败。"
-        profile = await self._build_profile(target, stream_id)
-        keywords = self._collect_search_keywords([profile])
-        videos, category_of = await self._fetch_candidates(keywords)
-        videos = self._prefilter(videos)
-        videos = [video for video in videos if not self._store.is_seen(video.bvid)]
-        results = rank_videos(
-            videos,
-            profile,
-            now=time.time(),
-            min_score=config.scoring.min_score,
-            require_interest_match=config.scoring.require_interest_match,
-            interest_weight=config.scoring.interest_weight,
-            title_match_boost=config.scoring.title_match_boost,
-            hot_weight=config.scoring.hot_weight,
-            freshness_weight=config.scoring.freshness_weight,
-            freshness_days=config.scoring.freshness_days,
-            min_duration=config.filter.min_duration_seconds,
-            max_duration=config.filter.max_duration_seconds,
-            min_play=config.filter.min_play,
-            min_like=config.filter.min_like,
-            block_keywords=config.filter.block_keywords,
-            block_up_names=config.filter.block_up_names,
-            exclude_partitions=config.filter.exclude_partitions,
-            use_tags=config.interest.use_tags,
-            tag_weight=config.interest.tag_weight,
-        )
-        if not results:
-            self._flush_pending_config_writes()
-            return f"候选 {len(videos)} 个，但没有视频通过过滤与打分阈值。"
-        lines = [f"候选 {len(videos)} 个，前 5 名："]
-        for index, result in enumerate(results[:5], 1):
-            video = result.video
-            matched = "、".join(result.matched[:3]) or "无"
-            lines.append(
-                f"{index}. {video.title}（{result.score:.1f} 分｜{video.play} 播放｜匹配：{matched}）"
-            )
-        self._flush_pending_config_writes()
-        return "\n".join(lines)
+            return {"success": False, "error": "需要在聊天里调用这个工具"}
+        query = (query or "").strip()
+        if not query:
+            return {"success": False, "error": "缺少搜索关键词"}
+        try:
+            limit = max(1, min(3, int(count or 1)))
+        except (TypeError, ValueError):
+            limit = 1
+        result = await self.search_and_share(query, stream_id, limit=limit)
+        if result.get("ok"):
+            shared = list(result.get("shared") or [])
+            return {
+                "success": True,
+                "content": f"已搜索并分享 {len(shared)} 条：{query}",
+                "shared": shared,
+            }
+        reason = str(result.get("reason") or "")
+        messages = {
+            "not_allowed": "这个会话不在插件白名单里，不能主动分享",
+            "cooldown": f"主动搜索还在冷却中，{int(result.get('remaining') or 0)} 秒后再试",
+            "disabled": "插件已禁用",
+            "no_candidates": "没搜到合适的视频",
+            "fetch_failed": f"搜索失败：{result.get('error') or ''}",
+        }
+        return {"success": False, "error": messages.get(reason, f"主动搜索没有成功：{reason}")}
+
+    @Tool(
+        "bili_shiwei",
+        description=(
+            "抓一个抽象整活类（「赤石」）B 站视频，原样分享到当前聊天，不带总结。"
+            "用户想看点离谱、整活的视频时用它；工具会自己完成搜索和发送，"
+            "不需要再调用 send。只能在插件白名单聊天流里使用。"
+        ),
+        chat_scope="all",
+        visibility="visible",
+        core_tool=True,
+    )
+    async def tool_bili_shiwei(self, **kwargs: Any) -> Dict[str, Any]:
+        stream_id = self._stream_from_tool_kwargs(kwargs)
+        if not stream_id:
+            return {"success": False, "error": "需要在聊天里调用这个工具"}
+        result = await self.share_shiwei(stream_id)
+        if result.get("ok"):
+            return {
+                "success": True,
+                "content": "赤石视频已送达",
+                "shared": list(result.get("shared") or []),
+            }
+        reason = str(result.get("reason") or "")
+        messages = {
+            "not_allowed": "这个会话不在插件白名单里，不能主动分享",
+            "cooldown": f"赤石视频还在冷却中，{int(result.get('remaining') or 0)} 秒后再试",
+            "no_candidates": "这次没捞到合适的赤石视频",
+        }
+        return {
+            "success": False,
+            "error": messages.get(reason, f"这次没捞到合适的赤石视频（{reason}）"),
+        }
 
     # -- 杂项 ----------------------------------------------------------
 

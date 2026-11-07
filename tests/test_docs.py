@@ -180,12 +180,10 @@ class ConfigFieldDescriptionTests(unittest.TestCase):
         self.assertEqual(missing, [], "\n".join(missing))
 
 
-class CommandDocTests(unittest.TestCase):
-    """README 指令表里写的指令和别名，代码里必须真的有。"""
+class ToolDocTests(unittest.TestCase):
+    """README 工具表里写的工具，代码里必须真的声明为可见工具。"""
 
-    ROW_RE = re.compile(
-        r"^\|\s*`(?P<primary>/[^\s`]+)[^`]*`\s*\|\s*(?P<alias>`/[^`]+`|—)\s*\|"
-    )
+    ROW_RE = re.compile(r"^\|\s*[\x60](?P<name>bili_[a-z_]+)[\x60]\s*\|")
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -193,51 +191,36 @@ class CommandDocTests(unittest.TestCase):
         from _helpers import load_plugin_module  # noqa: PLC0415
 
         cls.module = load_plugin_module()
-        cls.commands = []
+        cls.tools = {}
         for attr in dir(cls.module.BilibiliInterestSharePlugin):
             func = getattr(cls.module.BilibiliInterestSharePlugin, attr, None)
             info = getattr(func, "__maibot_component_info__", None)
-            pattern = getattr(info, "command_pattern", "") or ""
-            if pattern:
-                cls.commands.append(
-                    {
-                        "pattern": pattern,
-                        "aliases": list(getattr(info, "aliases", []) or []),
-                    }
-                )
+            name = getattr(info, "name", "") or ""
+            if name.startswith("bili_"):
+                cls.tools[name] = info
         cls.rows = []
         for line in README_PATH.read_text(encoding="utf-8").splitlines():
             match = cls.ROW_RE.match(line.strip())
             if match:
-                alias = match.group("alias")
-                cls.rows.append(
-                    (
-                        match.group("primary"),
-                        None if alias == "—" else alias.strip("`"),
-                    )
-                )
+                cls.rows.append(match.group("name"))
 
     def test_readme_rows_exist(self) -> None:
-        self.assertTrue(self.rows, "README 里没解析到指令表")
+        self.assertTrue(self.rows, "README 里没解析到工具表")
 
-    def test_every_readme_command_is_declared(self) -> None:
-        patterns = [item["pattern"] for item in self.commands]
-        for primary, _alias in self.rows:
-            self.assertTrue(
-                any(pattern.startswith("^" + primary) for pattern in patterns),
-                f"README 写了 {primary}，但代码里没有对应指令",
-            )
+    def test_every_readme_tool_is_declared(self) -> None:
+        for name in self.rows:
+            self.assertIn(name, self.tools, f"README 写了 {name}，但代码里没有这个工具")
 
-    def test_every_readme_alias_is_declared(self) -> None:
-        declared = {alias for item in self.commands for alias in item["aliases"]}
-        for primary, alias in self.rows:
-            if alias is None:
-                continue
-            self.assertIn(
-                alias,
-                declared,
-                f"README 说 {primary} 有别名 {alias}，但代码里没声明",
-            )
+    def test_declared_tools_are_documented(self) -> None:
+        readme = README_PATH.read_text(encoding="utf-8")
+        for name in self.tools:
+            self.assertIn(name, readme, f"工具 {name} 没写进 README")
+
+    def test_every_tool_is_visible_to_planner(self) -> None:
+        for name, info in self.tools.items():
+            metadata = getattr(info, "metadata", {}) or {}
+            self.assertIs(metadata.get("core_tool"), True, name)
+            self.assertEqual(metadata.get("visibility"), "visible", name)
 
 
 class ChangelogTests(unittest.TestCase):

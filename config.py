@@ -6,7 +6,7 @@
 
 - ``[plugin]``：插件总开关与配置版本（宿主保留字段，必须有）
 - ``[schedule]``：刷 B 站的频率（1 分钟 ~ 24 小时可调）与主动搜索冷却
-- ``[account]``：B 站登录（Cookie 可以手填，也可以用 ``/扫码登录`` 扫码自动保存）
+- ``[account]``：B 站登录（手动填写 Cookie）
 - ``[sources]``：候选视频来源（关键词搜索 / 热门 / 排行榜）
 - ``[categories]``：主动分享的内容类别（数组表 ``[[categories]]``，可自行增删）
 - ``[interest]``：兴趣提取与语义判断（LLM / 弹幕 / 字幕 / tags）
@@ -17,7 +17,7 @@
 - ``[persona]``：分享文案使用 MaiBot 配置的人设语气
 - ``[share]``：分享格式（随口一提 / 分条发送）
 - ``[reshare]``：自然语言「再发一遍」重发
-- ``[shiwei]``：``/赤石视频`` 专用配置
+- ``[shiwei]``：赤石视频工具专用配置
 - ``[advanced]``：数据目录、超时、去重等运行参数
 - ``[[streams]]``：白名单聊天流（数组表），每个流可单独配置兴趣与分享上限
 """
@@ -42,7 +42,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.1.0",
+        default="1.2.0",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -96,7 +96,7 @@ class ScheduleConfig(PluginConfigBase):
 
 
 class AccountConfig(PluginConfigBase):
-    """B 站登录：Cookie 可以手动填写，也可以在聊天里用 /扫码登录 扫码保存。"""
+    """B 站登录：手动填写 Cookie（Cookie 失效时插件会在日志里提示）。"""
 
     __ui_label__ = "账号登录"
     __ui_icon__ = "key"
@@ -105,21 +105,14 @@ class AccountConfig(PluginConfigBase):
     cookie: str = Field(
         default="",
         description=(
-            "B 站 Cookie（主要是 SESSDATA）。可以手动粘贴，也可以直接在聊天里发 /扫码登录 用手机扫码，"
-            "扫码成功后会自动保存，不用手填。留空表示匿名访问（匿名读不到字幕、排行榜接口也容易被风控）"
+            "B 站 Cookie（主要是 SESSDATA），从浏览器开发者工具里复制后粘贴到这里。"
+            "留空表示匿名访问（匿名读不到字幕、排行榜接口也容易被风控）"
         ),
         json_schema_extra={
             "label": "B 站 Cookie",
             "placeholder": "SESSDATA=...; bili_jct=...",
             "rows": 3,
         },
-    )
-    qrcode_timeout_seconds: int = Field(
-        default=180,
-        ge=30,
-        le=600,
-        description="/扫码登录 发出二维码后等待手机确认的秒数，超时就作废",
-        json_schema_extra={"label": "扫码等待时长（秒）"},
     )
     check_on_start: bool = Field(
         default=True,
@@ -663,8 +656,8 @@ class ShareConfig(PluginConfigBase):
         json_schema_extra={"label": "随口一句字数上限"},
     )
     intro_enabled: bool = Field(
-        default=True,
-        description="是否先用一句人设口吻的推荐语开场（仅关闭「随口一提」模式时生效）",
+        default=False,
+        description="是否先用一句人设口吻的推荐语开场（仅关闭「随口一提」模式时生效；默认关，只要简短介绍）",
         json_schema_extra={"label": "发送推荐语"},
     )
     intro_max_chars: int = Field(
@@ -675,8 +668,8 @@ class ShareConfig(PluginConfigBase):
         json_schema_extra={"label": "推荐语字数上限"},
     )
     send_as_parts: bool = Field(
-        default=True,
-        description="是否分条发送：①推荐语 ②【标题】链接 ③一段自然语言介绍；关闭则合成一条消息（「随口一提」模式下始终只发一条）",
+        default=False,
+        description="是否分条发送：①推荐语 ②【标题】链接 ③一段自然语言介绍；默认关，合成一条消息（「随口一提」模式下始终只发一条）",
         json_schema_extra={"label": "分条发送"},
     )
     part_delay_seconds: float = Field(
@@ -687,7 +680,7 @@ class ShareConfig(PluginConfigBase):
         json_schema_extra={"label": "分条间隔（秒）"},
     )
     narrative_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "是否发一段人设口吻的自然语言介绍（把「讲了什么」和「有什么好看」揉在一起，"
             "不用「内容：」「看点：」这类格式；仅关闭「随口一提」模式时生效）"
@@ -763,14 +756,14 @@ class ShiweiConfig(PluginConfigBase):
 
     enabled: bool = Field(
         default=True,
-        description="是否启用 /赤石视频 指令",
+        description="是否启用赤石视频工具（由麦麦自己决定什么时候整活）",
         json_schema_extra={"label": "启用赤石视频"},
     )
     cooldown_seconds: int = Field(
         default=600,
         ge=0,
         le=86400,
-        description="该指令的冷却秒数（默认 10 分钟）",
+        description="该工具的冷却秒数（默认 10 分钟）",
         json_schema_extra={"label": "冷却（秒）"},
     )
     max_share: int = Field(
@@ -879,7 +872,11 @@ class AdvancedConfig(PluginConfigBase):
 
 
 class ReadConfig(PluginConfigBase):
-    """读视频（bili_read 工具 + 贴链接自动读）。"""
+    """读视频（bili_read 工具 + 贴链接自动读）。
+
+    别人随手贴的链接默认走 brief（快速摘要、不调视觉模型）；有人 @ 机器人
+    或明确说「详细看看」时走 full（字幕时间轴 + 弹幕时间线 + 抽帧画面描述）。
+    """
 
     __ui_label__ = "读视频"
     __ui_icon__ = "book-open"
@@ -894,6 +891,34 @@ class ReadConfig(PluginConfigBase):
         default=True,
         description="白名单聊天流里有人贴 B 站链接时，自动读一遍并把要点交给麦麦（不用它主动调用工具）",
         json_schema_extra={"label": "贴链接自动读"},
+    )
+    full_trigger_keywords: List[str] = Field(
+        default=[
+            "详细看看",
+            "详细看",
+            "仔细看看",
+            "仔细看",
+            "认真看看",
+            "认真看",
+            "深度看",
+            "完整看",
+            "展开说说",
+            "详细说说",
+            "细讲",
+            "逐段",
+            "画面讲了什么",
+            "画面内容",
+        ],
+        description=(
+            "聊天里出现这些词时，自动读升级成 full（深度读 + 抽帧看画面）；"
+            "@ 机器人也会触发 full。平时别人贴链接只用 brief 快速读，不调视觉模型"
+        ),
+        json_schema_extra={"label": "深度读触发词"},
+    )
+    full_vision_enabled: bool = Field(
+        default=True,
+        description="full 深度读时是否抽帧交给视觉模型描述画面（需要 ffmpeg 和可用的视觉模型任务）",
+        json_schema_extra={"label": "深度读时抽帧看画面"},
     )
     auto_read_max_links: int = Field(
         default=1,
@@ -1041,7 +1066,7 @@ class BilibiliInterestShareConfig(PluginConfigBase):
     )
     account: AccountConfig = Field(
         default_factory=AccountConfig,
-        description="B 站登录（Cookie，或直接用 /扫码登录 扫码）",
+        description="B 站登录 Cookie（从浏览器开发者工具复制粘贴，留空则匿名访问）",
     )
     sources: SourcesConfig = Field(
         default_factory=SourcesConfig,
@@ -1086,7 +1111,7 @@ class BilibiliInterestShareConfig(PluginConfigBase):
     )
     shiwei: ShiweiConfig = Field(
         default_factory=ShiweiConfig,
-        description="/赤石视频 指令（抽象整活类视频分享）",
+        description="赤石视频工具（抽象整活类视频分享）",
     )
     advanced: AdvancedConfig = Field(
         default_factory=AdvancedConfig,

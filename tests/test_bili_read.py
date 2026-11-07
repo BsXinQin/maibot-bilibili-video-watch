@@ -15,6 +15,11 @@ from _helpers import FakeCtx, load_plugin_module, load_submodule  # noqa: E402
 READ = load_submodule("bili_read")
 
 
+async def _no_vision(brief):
+    """测试桩：不做抽帧描述。"""
+    return ""
+
+
 class _Comment:
     def __init__(self, message: str, user: str = "", like: int = 0) -> None:
         self.message = message
@@ -436,7 +441,7 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
 
     def _make_plugin(self, **overrides):
         config = {
-            "plugin": {"enabled": True, "config_version": "1.1.0"},
+            "plugin": {"enabled": True, "config_version": "1.2.0"},
             "read": {
                 "enabled": True,
                 "auto_read_enabled": True,
@@ -469,8 +474,14 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metadata.get("visibility"), "visible")
         self.assertIs(metadata.get("core_tool"), True)
         self.assertIn("子代理", metadata.get("description", ""))
-        commands = [item.get("name") for item in components]
-        self.assertIn("bili_read_cmd", commands)
+        names = [item.get("name") for item in components]
+        self.assertNotIn("bili_read_cmd", names, "聊天指令已移除")
+        for name in ("bili_search", "bili_shiwei"):
+            tool = [item for item in components if item.get("name") == name]
+            self.assertEqual(len(tool), 1, name)
+            tool_meta = tool[0].get("metadata") or {}
+            self.assertEqual(tool[0].get("chat_scope"), "all", name)
+            self.assertIs(tool_meta.get("core_tool"), True, name)
 
     async def test_tool_reads_video(self) -> None:
         result = await self.plugin.tool_bili_read(url="BV1TEST00001")
@@ -514,21 +525,6 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
         result = await self.plugin.tool_bili_read(url="BV1TEST00001")
         self.assertFalse(result["success"])
         self.assertIn("读取视频失败", result["error"])
-
-    async def test_command_sends_summary(self) -> None:
-        kwargs = {"matched_groups": {"target": "BV1TEST00001"}, "stream_id": "stream-1"}
-        ok, text, weight = await self.plugin.cmd_read(**kwargs)
-        self.assertTrue(ok)
-        self.assertEqual(weight, 2)
-        self.assertIn("【B站视频】", text)
-        self.assertEqual(len(self.ctx.send.messages), 1)
-        self.assertEqual(self.ctx.send.messages[0]["stream_id"], "stream-1")
-
-    async def test_command_without_target_prints_usage(self) -> None:
-        ok, text, _weight = await self.plugin.cmd_read()
-        self.assertTrue(ok)
-        self.assertIn("用法", text)
-        self.assertEqual(self.ctx.send.messages, [])
 
     async def test_auto_read_appends_context_once(self) -> None:
         message = {
@@ -587,6 +583,84 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         self.assertEqual(self.appender.calls, [])
+
+    async def test_auto_read_full_when_keyword(self) -> None:
+        called = {}
+
+        async def fake_describe(brief):
+            called["bvid"] = brief.bvid
+            return "画面上有人在打怪"
+
+        self.plugin._describe_video_frames = fake_describe
+        await self.plugin._maybe_auto_read(
+            {
+                "stream_id": "stream-1",
+                "processed_plain_text": "详细看看 https://www.bilibili.com/video/BV1TEST00001",
+            }
+        )
+        self.assertEqual(called.get("bvid"), "BV1TEST00001")
+        self.assertEqual(len(self.appender.calls), 1)
+        content = self.appender.calls[0]["segments"][0]["content"]
+        self.assertIn("深度读", content)
+        self.assertIn("【画面描述（抽帧）】", content)
+        self.assertIn("画面上有人在打怪", content)
+
+    async def test_auto_read_full_when_mentioned(self) -> None:
+        self.plugin._describe_video_frames = _no_vision
+        await self.plugin._maybe_auto_read(
+            {
+                "stream_id": "stream-1",
+                "raw_message": [{"type": "at", "data": {"qq": "999"}}],
+                "processed_plain_text": "https://www.bilibili.com/video/BV1TEST00001",
+            }
+        )
+        self.assertEqual(len(self.appender.calls), 1)
+        self.assertIn("深度读", self.appender.calls[0]["segments"][0]["content"])
+
+    async def test_auto_read_brief_skips_vision(self) -> None:
+        async def boom(brief):
+            raise AssertionError("brief 模式不该抽帧")
+
+        self.plugin._describe_video_frames = boom
+        await self.plugin._maybe_auto_read(
+            {
+                "stream_id": "stream-1",
+                "processed_plain_text": "https://www.bilibili.com/video/BV1TEST00001",
+            }
+        )
+        self.assertEqual(len(self.appender.calls), 1)
+        content = self.appender.calls[0]["segments"][0]["content"]
+        self.assertIn("快速读", content)
+        self.assertNotIn("画面描述", content)
+
+    async def test_auto_read_brief_then_full_is_not_deduped(self) -> None:
+        self.plugin._describe_video_frames = _no_vision
+        plain = {
+            "stream_id": "stream-1",
+            "processed_plain_text": "https://www.bilibili.com/video/BV1TEST00001",
+        }
+        await self.plugin._maybe_auto_read(plain)
+        deep = dict(plain)
+        deep["processed_plain_text"] = "详细看看 https://www.bilibili.com/video/BV1TEST00001"
+        await self.plugin._maybe_auto_read(deep)
+        self.assertEqual(len(self.appender.calls), 2)
+
+
+class FullReadTriggerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.module = load_plugin_module()
+
+    def test_mention_triggers_full(self) -> None:
+        message = {"raw_message": [{"type": "at", "data": {"qq": "123"}}]}
+        self.assertTrue(self.module.wants_full_read(message, "看看这个", []))
+
+    def test_keyword_triggers_full(self) -> None:
+        self.assertTrue(
+            self.module.wants_full_read({}, "你详细看看这个视频", ["详细看看"])
+        )
+
+    def test_plain_text_stays_brief(self) -> None:
+        self.assertFalse(self.module.wants_full_read({}, "看看这个", ["详细看看"]))
 
 
 if __name__ == "__main__":

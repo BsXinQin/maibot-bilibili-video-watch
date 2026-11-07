@@ -5,6 +5,35 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.2.0] - 2026-11-07
+
+按实际使用反馈做一次减法：聊天指令在 QQ 平台会被拦截，扫码登录用不上，读视频也要区分「随便看看」和「认真看看」。
+
+### 移除
+
+- 删除扫码登录模块（`bilibili_login.py`、`/扫码登录` 指令、`[account].qrcode_timeout_seconds`、`send.image` 能力）：登录改为在 WebUI 手动粘贴 `[account].cookie`，启动时用 `x/web-interface/nav` 检查登录态。
+- 删除全部聊天指令（`/bili-share`、`/bili-status`、`/bili-test`、`/bili-search`、`/读视频`、`/赤石视频`、`/扫码登录`）及 `Command` 相关代码：平台侧会拦截 `/` 开头的消息，实测发不出去。
+
+### 新增
+
+- 读视频分 brief / full 两档：别人贴链接默认 `brief`（摘要，不调视觉模型）；消息 @ 了机器人或命中 `[read].full_trigger_keywords` 时自动 `full`（字幕时间轴、弹幕时间线、更多热评）。
+- `full` 读会下载视频抽 4 帧交给视觉模型（`[read].full_vision_enabled`，还需 `[vision].enabled` 与可用的 `vlm` 任务），把画面描述一并写进上下文。
+- 自动读的去重键按模式区分：同一视频先被 brief 读过，之后被 @ 仍会重新 full 读一次。
+- 新增 `bili_search` 工具（原 `/bili-search`）：按关键词搜一条并分享，白名单与冷却照旧。
+- 新增 `bili_shiwei` 工具（原 `/赤石视频`）：抓一条抽象整活视频，只发标题+链接。
+- `[read]` 新增 `full_trigger_keywords`、`full_vision_enabled` 两个配置项。
+
+### 变更
+
+- 分享默认只发一条简短消息：`[share].intro_enabled`、`send_as_parts`、`narrative_enabled` 默认改为 `false`，想发长介绍再手动打开。
+- `bili_read` / `bili_search` / `bili_shiwei` 都声明 `core_tool=True` + `visibility="visible"`，对 Planner 直接可见。
+- 所有工具只对 `[[streams]]` 白名单会话生效，非白名单调用直接返回原因。
+
+### 修复
+
+- 重写读视频段落与配置表，补上 brief / full 的差异、触发条件与抽帧开关。
+- `_check_login_on_start` 改用 nav 接口，不再依赖扫码模块。
+
 ## [1.1.0] - 2026-11-07
 
 让 `bili_read` 能「详细看完」一个视频：以前只有摘要，很多细节会被截掉。
@@ -34,7 +63,7 @@
 
 - `bili_read` 报「B 站接口返回 HTTP 412」时不再直接放弃：先向 `x/frontend/finger/spi` 申请 `buvid3`/`buvid4` 补进 Cookie 再重试一次，匿名访问的 412 大多就此恢复。
 - 已有 `SESSDATA` 的配置不会被覆盖，只补缺失的 buvid 项。
-- 仍然 412 时给出可操作的报错：提示去配置里填 Cookie 或 `/扫码登录`，并说明这属于服务器 IP 被风控、需要换网络或代理。
+- 仍然 412 时给出可操作的报错：提示去配置里填 Cookie，并说明这属于服务器 IP 被风控、需要换网络或代理。
 - 请求头补上 `Accept-Language`，降低匿名请求被判为脚本的概率。
 - buvid 只在真的撞上 412 时才申请一次，不会给每次调用增加额外请求。
 

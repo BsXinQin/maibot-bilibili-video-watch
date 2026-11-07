@@ -114,22 +114,21 @@ class ReviewFixesTestCase(unittest.IsolatedAsyncioTestCase):
         summary = await plugin.run_round(reason="test")
         self.assertEqual(summary["shared"], 3)
 
-    # -- 指令走白名单 ---------------------------------------------------
+    # -- 工具走白名单 ---------------------------------------------------
 
-    async def test_search_command_rejects_non_whitelisted_stream(self) -> None:
+    async def test_search_tool_rejects_non_whitelisted_stream(self) -> None:
         plugin = self.make_plugin(
             client=FakeClient(
                 videos=[], search_results=[make_video(self.video_module, bvid="BVS9")]
             )
         )
-        result = await plugin.cmd_search(
-            stream_id="other-stream", matched_groups={"query": "原神"}
-        )
-        self.assertIn("白名单", result[1])
+        result = await plugin.tool_bili_search(stream_id="other-stream", query="原神")
+        self.assertFalse(result["success"])
+        self.assertIn("白名单", result["error"])
         joined = "\n".join(item["text"] for item in self.ctx.send.messages)
         self.assertNotIn("bilibili.com/video", joined)
 
-    async def test_shiwei_command_rejects_non_whitelisted_stream(self) -> None:
+    async def test_shiwei_tool_rejects_non_whitelisted_stream(self) -> None:
         plugin = self.make_plugin(
             client=FakeClient(
                 videos=[],
@@ -138,8 +137,9 @@ class ReviewFixesTestCase(unittest.IsolatedAsyncioTestCase):
                 ],
             )
         )
-        result = await plugin.cmd_shiwei(stream_id="other-stream")
-        self.assertIn("白名单", result[1])
+        result = await plugin.tool_bili_shiwei(stream_id="other-stream")
+        self.assertFalse(result["success"])
+        self.assertIn("白名单", result["error"])
         joined = "\n".join(item["text"] for item in self.ctx.send.messages)
         self.assertNotIn("bilibili.com/video", joined)
 
@@ -167,30 +167,30 @@ class ReviewFixesTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["reason"], "no_candidates")
         self.assertEqual(self.ctx.send.messages, [])
 
-    # -- 指令参数解析 ---------------------------------------------------
+    # -- 工具参数校验 ---------------------------------------------------
 
-    async def test_search_command_without_argument_shows_usage(self) -> None:
-        """不带参数时不能拿「/bili-search」本身去搜 B 站。"""
+    async def test_search_tool_without_query_is_rejected(self) -> None:
+        """没给关键词时不能拿空串去搜 B 站。"""
 
         plugin = self.make_plugin(
             client=FakeClient(
                 videos=[], search_results=[make_video(self.video_module, bvid="BVS8")]
             )
         )
-        result = await plugin.cmd_search(stream_id="stream-1", raw_message="/bili-search")
-        self.assertIn("用法", result[1])
-        self.assertEqual(self.ctx.send.messages[-1]["text"], "用法：/bili-search 关键词")
+        result = await plugin.tool_bili_search(stream_id="stream-1", query="")
+        self.assertFalse(result["success"])
+        self.assertIn("缺少搜索关键词", result["error"])
+        self.assertEqual(self.ctx.send.messages, [])
 
-    async def test_search_command_strips_command_prefix(self) -> None:
+    async def test_search_tool_passes_query_through(self) -> None:
         plugin = self.make_plugin(
             client=FakeClient(
                 videos=[], search_results=[make_video(self.video_module, bvid="BVS7")]
             )
         )
-        result = await plugin.cmd_search(
-            stream_id="stream-1", raw_message="/bili-search 机械键盘"
-        )
-        self.assertIn("已搜索并分享：机械键盘", result[1])
+        result = await plugin.tool_bili_search(stream_id="stream-1", query="机械键盘")
+        self.assertTrue(result["success"], result)
+        self.assertIn("机械键盘", result["content"])
 
 
 if __name__ == "__main__":

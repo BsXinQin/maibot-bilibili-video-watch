@@ -66,7 +66,7 @@ def base_config(**overrides):
     """返回一份“一定会分享”的测试配置（默认关闭 LLM/抽帧/弹幕，保证确定性）。"""
 
     config = {
-        "plugin": {"enabled": True, "config_version": "1.1.0"},
+        "plugin": {"enabled": True, "config_version": "1.2.0"},
         "schedule": {
             "interval_minutes": 30,
             "jitter_seconds": 0,
@@ -571,33 +571,6 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("画面（抽帧识别）", joined)
 
-    # -- 指令 ----------------------------------------------------------
-
-    async def test_manual_command_sends_summary(self) -> None:
-        plugin = self.make_plugin()
-        result = await plugin.cmd_share(stream_id="cmd-stream")
-        self.assertIsInstance(result, tuple)
-        self.assertTrue(result[0])
-        self.assertEqual(len(self.ctx.send.messages), 2)
-        self.assertEqual(self.ctx.send.messages[-1]["stream_id"], "cmd-stream")
-        self.assertIn("沁の刷B站视频完成", self.ctx.send.messages[-1]["text"])
-
-    async def test_status_command_text(self) -> None:
-        plugin = self.make_plugin()
-        await plugin.run_round(reason="test")
-        result = await plugin.cmd_status(stream_id="s")
-        text = result[1]
-        self.assertIn("每 30 分钟", text)
-        self.assertIn("白名单会话", text)
-        self.assertIn("累计分享", text)
-
-    async def test_test_command_preview(self) -> None:
-        plugin = self.make_plugin()
-        result = await plugin.cmd_test(stream_id="s")
-        text = result[1]
-        self.assertIn("候选", text)
-        self.assertIn("原神", text)
-
     # -- 人设语气 ------------------------------------------------------
 
     async def test_intro_sent_as_first_part(self) -> None:
@@ -731,20 +704,20 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
             base_config(interest={"use_llm_judge": True}), ctx=ctx
         )
         await plugin._persona.refresh()
-        text = (await plugin.cmd_status(stream_id="s"))[1]
-        self.assertIn("小虎鲸", text)
-        self.assertIn("宿主", text)
+        persona = plugin._persona.get()
+        self.assertEqual(persona.name, "小虎鲸")
+        self.assertEqual(persona.source, "host")
+        self.assertIn("爱刷 B 站", persona.personality)
 
-    async def test_status_reports_missing_persona(self) -> None:
+    async def test_missing_persona_is_empty(self) -> None:
         plugin = self.make_plugin(base_config(persona={"enabled": True}))
-        text = (await plugin.cmd_status(stream_id="s"))[1]
-        self.assertIn("人设语气", text)
-        self.assertIn("未读到人设", text)
+        await plugin._persona.refresh()
+        self.assertTrue(plugin._persona.get().is_empty)
 
-    async def test_status_reports_disabled_persona(self) -> None:
+    async def test_disabled_persona_is_empty(self) -> None:
         plugin = self.make_plugin(base_config(persona={"enabled": False}))
-        text = (await plugin.cmd_status(stream_id="s"))[1]
-        self.assertIn("人设语气：已关闭", text)
+        await plugin._persona.refresh()
+        self.assertTrue(plugin._persona.get().is_empty)
 
     async def test_reshare_reuses_cached_intro(self) -> None:
         video = make_video(self.video_module, bvid="BVR2", title="原神新版本测评")
@@ -778,11 +751,11 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
             search_results=[make_video(self.video_module, bvid="BVS1", title="原神新版本测评")],
         )
         plugin = self.make_plugin(client=client)
-        result = await plugin.cmd_search(
-            stream_id="stream-1", matched_groups={"query": "原神"}
+        result = await plugin.tool_bili_search(
+            stream_id="stream-1", query="原神"
         )
-        self.assertTrue(result[0])
-        self.assertIn("已搜索并分享", result[1])
+        self.assertTrue(result["success"], result)
+        self.assertIn("已搜索并分享", result["content"])
         # 冷却期内再次搜索会被拒绝
         second = await plugin.search_and_share("原神", "stream-1")
         self.assertFalse(second["ok"])
@@ -819,8 +792,8 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
             ],
         )
         plugin = self.make_plugin(client=client)
-        result = await plugin.cmd_shiwei(stream_id="stream-1")
-        self.assertTrue(result[0])
+        result = await plugin.tool_bili_shiwei(stream_id="stream-1")
+        self.assertTrue(result["success"], result)
         texts = [item["text"] for item in self.ctx.send.messages]
         joined = "\n".join(texts)
         self.assertIn("【离谱整活：这波操作太抽象了】", joined)
@@ -935,11 +908,15 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(defaults["schedule"]["interval_minutes"], 60)
         self.assertEqual(defaults["schedule"]["search_cooldown_seconds"], 300)
         self.assertTrue(defaults["plugin"]["enabled"])
-        self.assertEqual(defaults["plugin"]["config_version"], "1.1.0")
+        self.assertEqual(defaults["plugin"]["config_version"], "1.2.0")
         self.assertEqual(defaults["interest"]["llm_task_name"], "planner")
         self.assertEqual(defaults["vision"]["task_name"], "vlm")
         self.assertTrue(defaults["categories"])
-        self.assertTrue(defaults["share"]["send_as_parts"])
+        self.assertFalse(defaults["share"]["send_as_parts"])
+        self.assertFalse(defaults["share"]["intro_enabled"])
+        self.assertFalse(defaults["share"]["narrative_enabled"])
+        self.assertTrue(defaults["read"]["full_vision_enabled"])
+        self.assertIn("详细看看", defaults["read"]["full_trigger_keywords"])
 
     def test_config_schema_includes_streams(self) -> None:
         schema = self.module.BilibiliInterestSharePlugin.build_config_schema(
@@ -980,78 +957,6 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
             base_config(account={"cookie": ""}, advanced={"cookie": "SESSDATA=old"})
         )
         self.assertEqual(plugin._effective_cookie(), "SESSDATA=old")
-
-    async def test_apply_login_cookie_updates_client_memory_and_file(self) -> None:
-        plugin = self.make_plugin()
-        path = self._write_config_file(plugin)
-        await plugin._apply_login_cookie("SESSDATA=abc; bili_jct=1", "stream-1")
-        self.assertEqual(plugin._client.cookie, "SESSDATA=abc; bili_jct=1")
-        self.assertEqual(plugin.config.account.cookie, "SESSDATA=abc; bili_jct=1")
-        self.assertIn("SESSDATA=abc", path.read_text(encoding="utf-8"))
-        joined = "\n".join(self.ctx.send.messages[-1:][0]["text"] for _ in [0])
-        self.assertIn("登录成功", joined)
-
-    async def test_apply_login_cookie_empty_is_reported(self) -> None:
-        plugin = self.make_plugin()
-        self._write_config_file(plugin)
-        await plugin._apply_login_cookie("", "stream-1")
-        self.assertIn("没取到 Cookie", self.ctx.send.messages[-1]["text"])
-
-    async def test_login_command_rejects_concurrent_task(self) -> None:
-        plugin = self.make_plugin()
-        plugin._login_task = asyncio.create_task(asyncio.sleep(0.2))
-        try:
-            ok, text, _ = await plugin.cmd_login(session_id="stream-1")
-        finally:
-            plugin._login_task.cancel()
-        self.assertTrue(ok)
-        self.assertIn("进行中", text)
-        self.assertIn("进行中", self.ctx.send.messages[-1]["text"])
-
-    async def test_login_command_requires_stream(self) -> None:
-        plugin = self.make_plugin()
-        ok, text, _ = await plugin.cmd_login()
-        self.assertTrue(ok)
-        self.assertIn("需要在一个聊天里发起", text)
-
-    async def test_login_command_without_client_reports(self) -> None:
-        plugin = self.make_plugin()
-        plugin._client = None
-        ok, text, _ = await plugin.cmd_login(session_id="stream-1")
-        self.assertTrue(ok)
-        self.assertIn("还没加载完成", text)
-
-    async def test_login_command_is_rejected_in_group_chat(self) -> None:
-        plugin = self.make_plugin()
-        ok, text, _ = await plugin.cmd_login(session_id="stream-1", group_id="12345")
-        self.assertTrue(ok)
-        self.assertIn("只能在私聊", text)
-        self.assertIsNone(plugin._login_task, "群聊里不应该真的发起扫码登录")
-
-    async def test_login_command_allowed_in_private_chat(self) -> None:
-        plugin = self.make_plugin()
-        ok, text, _ = await plugin.cmd_login(session_id="stream-1", group_id="")
-        self.assertTrue(ok)
-        self.assertIn("正在生成登录二维码", text)
-        self.assertIsNotNone(plugin._login_task)
-        plugin._login_task.cancel()
-
-    async def test_send_image_uses_base64_without_data_uri(self) -> None:
-        plugin = self.make_plugin()
-        sent = await plugin._send_image("stream-1", b"\x89PNG-fake")
-        self.assertTrue(sent)
-        self.assertEqual(len(self.ctx.send.images), 1)
-        payload = self.ctx.send.images[0]["data"]
-        self.assertNotIn("data:image", payload)
-        self.assertEqual(payload, "iVBORy1mYWtl")
-
-    async def test_send_image_falls_back_to_alternative_stream(self) -> None:
-        plugin = self.make_plugin()
-        plugin._stream_fallbacks["stream-1"] = ["stream-2"]
-        self.ctx.send.fail_streams.add("stream-1")
-        sent = await plugin._send_image("stream-1", b"png")
-        self.assertTrue(sent)
-        self.assertEqual(self.ctx.send.images[0]["stream_id"], "stream-2")
 
     # -- 自动兴趣写回 / 人设初始兴趣 ------------------------------------
 
@@ -1448,35 +1353,6 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         profile = await plugin._build_profile(plugin.config.streams[0], "stream-1")
         self.assertEqual(profile.sorted_terms(), [])
 
-    def test_status_reports_login_and_interests(self) -> None:
-        plugin = self.make_plugin(
-            base_config(
-                streams=[
-                    {
-                        "name": "测试群",
-                        "enabled": True,
-                        "group_id": "12345",
-                        "interests": ["手写词"],
-                        "auto_interests": ["自动词"],
-                        "auto_interest": True,
-                    }
-                ]
-            )
-        )
-        text = plugin._format_status()
-        self.assertIn("B 站登录：未登录", text)
-        self.assertIn("手写：手写词", text)
-        self.assertIn("自动：自动词", text)
-
-    def test_status_reports_logged_in(self) -> None:
-        plugin = self.make_plugin(base_config(account={"cookie": "SESSDATA=x"}))
-        login_module = load_submodule("bilibili_login")
-        plugin._login_state = login_module.LoginState(
-            status="success", message="", cookie="SESSDATA=x", uname="小鲸鱼"
-        )
-        self.assertIn("已登录（小鲸鱼）", plugin._account_desc())
-
-
 
 class PackagingTest(unittest.TestCase):
     """用 MaiBot 自带的校验器检查清单与配置能被宿主接受。"""
@@ -1564,7 +1440,7 @@ class PackagingTest(unittest.TestCase):
             raw = tomllib.load(handle)
         plugin = load_plugin_module().BilibiliInterestSharePlugin()
         plugin.set_plugin_config(raw)  # 不应抛异常
-        self.assertEqual(plugin.config.plugin.config_version, "1.1.0")
+        self.assertEqual(plugin.config.plugin.config_version, "1.2.0")
         self.assertEqual(plugin.config.streams, [])
         self.assertTrue(plugin.config.categories)
         self.assertEqual(plugin.config.vision.task_name, "vlm")

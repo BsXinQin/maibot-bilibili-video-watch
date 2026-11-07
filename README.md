@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.1.0-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.2.0-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -9,7 +9,9 @@
 
 插件会读视频的标签、字幕、弹幕和热门评论，必要时**下载视频抽几帧看画面**，再让 LLM 判断「这视频到底讲了什么、值不值得分享」，最后用**符合人设口吻的自然语言**说出来，像群友随口安利那样。
 
-> 当前版本 **v1.1.0** · 全部配置项已中文化 · 支持手机扫码登录 B 站 · 能读视频（含深度读）
+反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
+
+> 当前版本 **v1.2.0** · 全部配置项已中文化 · 手动填 Cookie 登录 · 读视频分 brief / full 两档
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -35,7 +37,7 @@
   - [`[read]` 读视频](#read-读视频)
   - [`[advanced]` 运行参数](#advanced-运行参数)
   - [`[[streams]]` 白名单聊天流](#streams-白名单聊天流)
-- [指令](#指令)
+- [工具](#工具)
 - [工作原理](#工作原理)
 - [数据文件](#数据文件)
 - [目录结构](#目录结构)
@@ -54,16 +56,16 @@
 | **白名单** | 只有 `[[streams]]` 里列出的聊天流会收到分享，每个流可单独配兴趣、类别、数量 |
 | **兴趣来源** | ① 配置里手写兴趣 ② 自动从该流近期聊天提取高频词 ③ 没有兴趣时用通用的「人设初始兴趣」兜底 ④ 视频标签/标题/简介/分区/UP 名 |
 | **兴趣可见可改** | 自动提取的兴趣会**写回配置**的 `auto_interests`，在设置页能看到、也能直接改；手动改过就锁定，插件不再覆盖 |
-| **扫码登录** | `/扫码登录` 发一张二维码（**仅私聊可用**），手机 B 站扫码后自动保存 Cookie；登录后能读字幕、排行榜更稳 |
+| **手动登录** | 在 WebUI 的「账号登录 → B 站 Cookie」里粘贴浏览器 Cookie 即可；登录后能读字幕、排行榜更稳 |
 | **多来源抓取** | 关键词搜索（WBI 签名，免登录可用）、热门列表、排行榜，全部可开关 |
 | **内容类别** | 新鲜资讯 / 社区创作 / 玩家投稿 / 外网搬运，类别与关键词都可增删改 |
 | **深度理解** | 字幕 + 弹幕 + 热门评论 + **抽帧识图** + LLM 语义判断与自然语言介绍 |
 | **噪声过滤** | 硬过滤（时长/播放/点赞/屏蔽词/官方内容）+ AI 鱼灾式模板弹幕评论过滤 |
 | **去重** | 分享过的视频记入名单，默认 30 天内不再自动分享 |
-| **主动搜索** | `/bili-search 关键词`，独立冷却（默认 5 分钟），不影响自动频率 |
+| **主动搜索** | 麦麦可以自己调 `bili_search` 工具按关键词搜一条并分享，独立冷却（默认 5 分钟），不影响自动频率 |
 | **自然语言重发** | 聊天里说「你之前发的那个 XX 再发一遍」，从历史记录里找回并复用当时的文案 |
-| **赤石视频** | `/赤石视频` 抓一个抽象整活视频，只发标题+链接，不带介绍 |
-| **能读视频** | 反过来也能读：`bili_read` 工具 + 白名单会话里**贴链接自动读**，把简介、分P、CC 字幕、热评、弹幕交给麦麦，不用再对着标题瞎猜；想让麦麦细看时传 `detail="full"`，带字幕时间轴与弹幕时间线 |
+| **赤石视频** | 麦麦可以调 `bili_shiwei` 工具抓一个抽象整活视频，只发标题+链接，不带介绍 |
+| **能读视频** | `bili_read` 工具 + 白名单会话里**贴链接自动读**（brief：简介、分P、字幕节选、热评、弹幕，不调视觉模型）；有人 @ 麦麦或说「详细看看」时自动切 full：字幕时间轴、弹幕时间线、更多热评，并**抽帧看画面** |
 | **人设语气** | 推荐语与介绍按 MaiBot 的**麦麦人设**口吻生成，可覆盖、可关 |
 | **全中文配置** | 每个配置项都有中文名和中文说明，WebUI 表单直接看得懂 |
 
@@ -71,14 +73,14 @@
 
 ## 分享效果
 
-默认的「随口一提」模式下，群里看到的就是一条消息——一句人设口吻的随口评价 + 标题 + 链接：
+默认只发**一条简短消息**：一句人设口吻的随口评价 + 标题 + 链接，不再追加长介绍（`[share]` 里的 `intro_enabled` / `send_as_parts` / `narrative_enabled` 默认都是 `false`）：
 
 ```
 呜哇这个我也刷到了，几套新配队思路比我自己瞎搭的强多了
 【【原神】5.2 深渊满星配队实测】 https://www.bilibili.com/video/BV1xxxxxxxxx
 ```
 
-关掉 `[share].casual_mode` 后改成分条发送，能带上更完整的介绍：
+想要更完整的安利时，把 `[share].intro_enabled`、`send_as_parts`、`narrative_enabled` 打开（并关掉 `casual_mode`），就会变回「推荐语 / 标题+链接 / 介绍」分条发送：
 
 ```
 来了来了，这个我之前刷到过
@@ -110,15 +112,13 @@ https://www.bilibili.com/video/BV1xxxxxxxxx
 
 ### 2. 登录 B 站（推荐，可选）
 
-登录不是必须的，但登录后能读**字幕**、排行榜和搜索都更稳。**在私聊里**（群里不行）发：
+登录不是必须的，但登录后能读**字幕**、排行榜和搜索都更稳。
 
-```
-/扫码登录
-```
+在 WebUI 里打开插件配置 → `[account]` → `cookie`，把浏览器里的 B 站 Cookie 粘进去（形如 `SESSDATA=...; bili_jct=...`），保存即生效。
 
-插件会发一张二维码图片，用手机 B 站客户端扫码并在手机上确认，Cookie 会自动写进配置的 `[account].cookie`，立刻生效。也可以在 WebUI 里手动填 Cookie。
+获取方式：浏览器登录 bilibili.com → F12 开发者工具 → Network → 随便点一个请求 → 复制请求头里的 `Cookie` 整行。
 
-> 扫码登录**只支持私聊**（群里发二维码容易被别人扫走），二维码 180 秒内有效（`[account].qrcode_timeout_seconds`）。
+> Cookie 属于敏感凭证，只存在插件目录的 `config.toml` 里，别提交到公开仓库。
 
 ### 3. 配置白名单
 
@@ -134,19 +134,19 @@ auto_interest = true                 # 允许从群聊记录里自动提取兴�
 auto_interests = []                  # 自动提取的兴趣，插件会自己写，也可以手动改
 ```
 
-找不到群号？在群里发一句 `/bili-status`，日志会打印解析到的会话信息；也可以直接把 `stream_id` 填上（优先级最高）。
+找不到群号？插件启动时会打印解析到的白名单会话；也可以直接把 `stream_id` 填上（优先级最高），或者用 `group_id` / `user_id` 让宿主自动反查。
 
 ### 4. 确认在跑
 
-- `/bili-status`：看登录状态、频率、白名单、各会话兴趣、下一轮时间
-- `/bili-test`：预览本轮候选与打分，只发预览、不分享视频
-- `/bili-share`：立刻跑一轮
+- 插件加载后日志里会打出下一轮时间；把 `[advanced].debug` 设为 `true` 能看到每轮抓取、过滤、打分的细节
+- 想立刻分享一条：在白名单群里让麦麦「去 B 站搜个 XX 视频分享一下」，它会调 `bili_search` 工具
+- 想验证读视频：在群里贴一条 B 站链接，看它能不能接着聊视频内容
 
 > 仓库里的 `config.example.toml` 是**带完整中文注释的配置模板**，每个键上方都有一行说明，值等于内置默认值，可以整份复制成 `config.toml` 再改。
 
 ### 运行环境
 
-- **运行时不依赖额外 pip 包**：HTTP 用宿主自带的 `httpx`，二维码用宿主环境里的 `qrcode`/`Pillow`。
+- **运行时不依赖额外 pip 包**：HTTP 用宿主自带的 `httpx`，配置回写用 `tomlkit`。
 - **抽帧识图需要 ffmpeg**（可选）：优先 `[advanced].ffmpeg_path`，其次 `imageio-ffmpeg`，最后查系统 `PATH`；都没有就自动跳过抽帧，其余流程正常。
 - `_manifest.json` 把 `imageio-ffmpeg` 声明成 `python_package` 依赖（`>=0.4.9`），缺了宿主会自动装（等于自带一份 ffmpeg）。完全离线部署时也可以手动 `pip install imageio-ffmpeg` 或直接在 `PATH` 放一个 `ffmpeg`，宿主检测到已满足就不会联网。
 
@@ -163,7 +163,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.1.0"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.2.0"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -180,9 +180,8 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `cookie` | `""` | B 站 Cookie。发 `/扫码登录` 会自动填进来，也可以手动粘贴（形如 `SESSDATA=...; bili_jct=...`） |
-| `qrcode_timeout_seconds` | `180` | `/扫码登录` 发出二维码后等待手机确认的秒数，超时作废 |
-| `check_on_start` | `true` | 启动时检查一次登录状态，Cookie 失效会在日志里提示 |
+| `cookie` | `""` | B 站 Cookie，手动粘贴（形如 `SESSDATA=...; bili_jct=...`）；留空则匿名访问 |
+| `check_on_start` | `true` | 启动时请求一次 nav 接口检查登录状态，Cookie 失效会在日志里提示 |
 
 登录后能做什么：
 
@@ -346,15 +345,15 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 | --- | --- | --- |
 | `casual_mode` | `true` | **「随口一提」模式**：一句话 + 【标题】链接合成**一条**消息，像群里顺嘴提一句 |
 | `casual_max_chars` | `60` | 随口一句的字数上限（仅 `casual_mode = true` 时生效） |
-| `intro_enabled` | `true` | 是否先发一句**人设口吻的推荐语**（关闭「随口一提」时生效） |
+| `intro_enabled` | `false` | 是否先发一句**人设口吻的推荐语**（默认关，关掉「随口一提」后才有意义） |
 | `intro_max_chars` | `40` | 推荐语字数上限 |
-| `send_as_parts` | `true` | 分条发送（关闭「随口一提」时生效） |
+| `send_as_parts` | `false` | 分条发送（默认关，关掉「随口一提」后才有意义） |
 | `part_delay_seconds` | `0.8` | 分条之间的间隔 |
-| `narrative_enabled` | `true` | 是否发一段人设口吻的**自然语言介绍**（关闭「随口一提」时生效） |
+| `narrative_enabled` | `false` | 是否发一段人设口吻的**自然语言介绍**（默认关，关掉「随口一提」后才有意义） |
 | `narrative_max_chars` | `160` | 介绍文案字数上限 |
 | `include_stats_line` | `false` | 消息里是否附 UP / 时长 / 播放 |
 
-**默认「随口一提」**（`casual_mode = true`）只发一条消息，语气是「刚好刷到、顺嘴说一句」：
+**默认「随口一提」**（`casual_mode = true`，且 `intro_enabled` / `send_as_parts` / `narrative_enabled` 都是 `false`）只发一条消息，语气是「刚好刷到、顺嘴说一句」：
 
 ```
 这期把新版本的角色和玩法都聊透了，看到一半我就想去试试了 【标题】 https://www.bilibili.com/video/BVxxxx
@@ -362,7 +361,7 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 
 模型会被告知不要用「推荐」「分享」「安利」「值得一看」「大家快看」这类词，可以带吐槽、情绪或疑问——读起来更像群友闲聊，而不是机器人在按流程发内容。
 
-**关掉「随口一提」**（`casual_mode = false`）回到分条格式：
+**把三项都打开**（`casual_mode = false`）回到分条格式：
 
 ```
 第 1 条：呜哇，这个必须拉你们一起看！            ← 推荐语（LLM 按人设生成）
@@ -392,8 +391,8 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `enabled` | `true` | 是否启用 `/赤石视频` 指令 |
-| `cooldown_seconds` | `600` | 该指令的冷却（秒） |
+| `enabled` | `true` | 是否启用赤石视频工具（由麦麦自己决定什么时候整活） |
+| `cooldown_seconds` | `600` | 该工具的冷却（秒） |
 | `max_share` | `1` | 一次最多分享几个 |
 | `keywords` | 见配置 | 搜索关键词（抽象/整活/鬼畜/离谱/翻车/整蛊/土味/迷惑行为…） |
 | `search_keywords_per_round` | `2` | 每次用几个关键词去搜 |
@@ -402,11 +401,18 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 | `max_duration_seconds` | `900` | 视频最长时长（秒） |
 | `block_keywords` | 见配置 | 命中即跳过（官方/预告/发布会/宣传片） |
 
-`/赤石视频` 只发「【标题】链接」，**不带介绍文案**，也不影响普通分享的去重与冷却。这条路径同样会过 `[filter]` 的全局过滤（`block_keywords`、`block_up_names`、`exclude_official`），并且**只对白名单会话生效**。
+麦麦调用 `bili_shiwei` 工具时只发「【标题】链接」，**不带介绍文案**，也不影响普通分享的去重与冷却。这条路径同样会过 `[filter]` 的全局过滤（`block_keywords`、`block_up_names`、`exclude_official`），并且**只对白名单会话生效**。
 
 ### `[read]` 读视频
 
-这个插件不只是「往外发」，也能「往里读」。两条入口共用同一套读取逻辑：
+这个插件不只是「往外发」，也能「往里读」。同一套接口数据，分两档深度：
+
+- **brief（默认）**：别人贴链接时自动读这一档——标题 / UP 主 / 分区 / 时长 / 数据 / 发布时间 / 分P / 标签 / 简介 / CC 字幕节选 / 热评 / 弹幕采样，全文上限 `max_chars`，**不调视觉模型**，只够「大概知道这视频讲什么」，最省 token。
+- **full（有人特意让你看时）**：字幕按 90 秒分块带 `[分:秒]` 时间轴、弹幕按分钟聚合成时间线、热评 15 条、分P 全列、简介 800 字、整体上限 9000 字；`full_vision_enabled` 打开时还会**下载视频抽 4 帧交给视觉模型**，把画面内容一起写进上下文。
+
+什么时候自动切 full：消息里 **@ 了麦麦**（at 段），或者文字命中 `full_trigger_keywords`（默认「详细看看 / 仔细看看 / 认真看 / 深度看 / 完整看 / 展开说说 / 细讲 / 逐段 / 画面讲了什么…」）。其他人只是丢个链接时走 brief。两档的去重键是分开的——同一个视频先被 brief 读过，之后再被 @ 一次仍会重新 full 读。
+
+两条入口共用同一套读取逻辑：
 
 1. **工具 `bili_read`**：把「读取 B 站视频内容」作为工具交给麦麦。你贴链接、或者问「这视频讲了什么」「值不值得看」时，它会自己调用工具，拿到的是接口里的真实数据，而不是靠标题猜。参数是 `url`（链接 / BV 号 / av 号都行）和可选的 `detail`（`brief` 默认、省 token；`full` 深度读，见下）。
 
@@ -415,20 +421,22 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 
 读到的内容包括：标题 / UP 主 / 分区 / 时长 / 播放·弹幕·评论·点赞·投币·收藏 / 发布时间 / 分P 列表 / 标签 / 简介 / CC 字幕节选 / 热评 / 弹幕采样。任何一项拿不到就跳过，不会因为缺字幕整条失败。
 
-**深度读（`detail="full"`）**：默认的 `brief` 档是摘要，细节会被截掉（简介 300 字、字幕节选、热评 8 条、弹幕采样 24 条、分P 最多列 8 个）。想让麦麦逐段看完再回答时，让模型传 `detail="full"`：字幕按 90 秒分块并带 `[分:秒]` 时间轴、弹幕按分钟聚合成时间线（条数多的就是高能段落）、热评加到 15 条、分P 全列、简介 800 字，整体上限 9000 字。深度读不走配置里的 `comment_limit` / `danmaku_limit` / `max_chars`（内部固定 15 条热评 / 120 条弹幕 / 12000 字幕字 / 9000 输出字），适合「把这期视频讲清楚」这类问题；日常聊天用默认档更省 token。匿名没有 CC 字幕时，深度读也只能靠弹幕时间线 + 热评推断内容。
+**brief 的截断规则**：简介 300 字、字幕节选、热评 8 条、弹幕采样 24 条、分P 最多列 8 个，全文上限 `max_chars`。**full 不走这几个配置**（内部固定 15 条热评 / 120 条弹幕 / 12000 字幕字 / 9000 输出字），适合「把这期视频讲清楚」这类问题；日常聊天用 brief 更省 token。匿名没有 CC 字幕时，full 也只能靠弹幕时间线 + 热评 + 画面推断内容。
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用 `bili_read` 工具（关掉后麦麦就调不到它了） |
 | `auto_read_enabled` | `true` | 白名单会话里贴链接时是否自动读 |
 | `auto_read_max_links` | `1` | 一条消息最多自动读几个链接（`1`~`3`，防止刷屏） |
+| `full_trigger_keywords` | 见配置 | 命中这些词就自动切 full 深度读（@ 麦麦也会触发）。默认「详细看看 / 仔细看看 / 认真看 / 深度看 / 完整看 / 展开说说 / 细讲 / 逐段 / 画面讲了什么 / 画面内容」 |
+| `full_vision_enabled` | `true` | full 读时是否抽帧交给视觉模型看画面（还要 `[vision].enabled` 同时打开、`vlm` 任务可用） |
 | `comment_limit` | `8` | 读几条热评（`0`~`20`） |
 | `danmaku_limit` | `30` | 采样多少条弹幕（`0`~`100`） |
 | `use_subtitle` | `true` | 是否读 CC 字幕（需要登录 Cookie） |
 | `max_chars` | `3500` | 交给模型的内容上限，太长会按顺序截断 |
 | `cache_seconds` | `900` | 同一个视频多少秒内复用缓存（也用作自动读的防重复窗口） |
 
-同一条视频在 `cache_seconds` 内被重复读到会直接走缓存，不会反复打 B 站接口。短链（`b23.tv` / `bili2233.cn`）会先跟随跳转再解析。
+同一条视频在 `cache_seconds` 内被重复读到会直接走缓存，不会反复打 B 站接口；缓存按读取参数分键，brief 与 full 各存一份。短链（`b23.tv` / `bili2233.cn`）会先跟随跳转再解析。
 
 ### `[advanced]` 运行参数
 
@@ -476,17 +484,17 @@ max_share_per_round = 0           # 该流每轮最多几个，0 = 用 [schedule
 
 ---
 
-## 指令
+## 工具
 
-| 指令 | 别名 | 说明 |
+聊天指令已经全部移除：QQ 平台侧会拦截 `/` 开头的消息，实测发不出去。现在只保留工具，由麦麦自己判断什么时候用：
+
+| 工具 | 参数 | 说明 |
 | --- | --- | --- |
-| `/扫码登录` | `/bili-login` `/扫码登陆` | 发二维码扫码登录 B 站，成功后自动保存 Cookie（**仅私聊可用**） |
-| `/bili-share` | `/b站分享` | 立即跑一轮（无视自动频率，仍受活跃时段限制） |
-| `/bili-status` | — | 查看登录状态、频率、白名单、各会话兴趣、下一轮时间、记录统计 |
-| `/bili-test` | — | 预览本轮候选与前 5 名打分，只把预览发回当前会话，**不分享视频** |
-| `/bili-search 关键词` | `/b站搜索` | 主动搜索并分享，受 `search_cooldown_seconds` 冷却；**只在白名单会话里生效** |
-| `/赤石视频` | — | 抓一个抽象整活视频，只发标题+链接；**只在白名单会话里生效** |
-| `/读视频 链接或BV号` | `/bili-read` | 读这个视频并把摘要发回当前会话（简介/分P/字幕/热评/弹幕）；平时贴链接会自动读，这条是手动预览 |
+| `bili_read` | `url` 必填；`detail` 可选（`brief` / `full`） | 读一个 B 站视频：标题、UP、简介、分P、字幕、热评、弹幕；`full` 另带字幕时间轴、弹幕时间线与画面描述 |
+| `bili_search` | `query` 必填；`count` 可选 | 按关键词搜 B 站并挑一条分享到当前会话；受 `search_cooldown_seconds` 冷却，**只在白名单会话里生效** |
+| `bili_shiwei` | 无 | 抓一个抽象整活视频（赤石），只发标题+链接；受 `[shiwei].cooldown_seconds` 冷却，**只在白名单会话里生效** |
+
+三个工具都对 Planner 直接可见（`core_tool` + `visibility="visible"`），不需要先 `tool_search`，也不用派子代理空转等待。
 
 ---
 
@@ -508,7 +516,7 @@ max_share_per_round = 0           # 该流每轮最多几个，0 = 用 [schedule
   │    ├─ 读弹幕（过滤 AI 鱼灾）+ 热门评论
   │    ├─ 下载视频抽 4 帧（vlm 任务识图）
   │    └─ 读人设 → LLM 判断是否贴合兴趣 → 按人设口吻生成推荐语 + 介绍
-  ├─ 发送：默认「随口一提」一条；关掉后分条发（推荐语 / 标题+链接 / 介绍）
+  ├─ 发送：默认一条简短消息（标题+链接+一句随口评价）；打开分条后按推荐语 / 标题+链接 / 介绍发
   └─ 写入 state.json（去重名单 + 分享记录 + 冷却时间）
 ```
 
@@ -544,10 +552,9 @@ github.BsXinQin.bilibili_video_watch/
 ├── README.md             # 本文档
 ├── config.example.toml   # 带中文注释的配置模板（可复制成 config.toml）
 ├── config.py             # 配置模型（WebUI 表单由它生成，全中文）
-├── config_edit.py        # 把扫码得到的 Cookie / 自动兴趣写回 config.toml
-├── plugin.py             # 插件主体：调度、抓取、打分、分享、指令、Hook
+├── config_edit.py        # 把自动兴趣写回 config.toml
+├── plugin.py             # 插件主体：调度、抓取、打分、分享、工具、Hook
 ├── bilibili.py           # B 站接口客户端（WBI 签名、搜索、详情、弹幕、评论、字幕）
-├── bilibili_login.py     # 扫码登录（二维码生成 / 轮询 / 校验登录态）
 ├── interest.py           # 兴趣关键词提取与打分
 ├── textfilter.py         # AI 鱼灾弹幕/评论过滤
 ├── media.py              # 取流下载 + ffmpeg 抽帧
@@ -558,7 +565,7 @@ github.BsXinQin.bilibili_video_watch/
 │   ├── live_check.py     # 真实联网自检（可选抽帧/弹幕/LLM/赤石）
 │   ├── probe_persona.py  # 人设自检：打印读到的人设 + 注入后的 prompt（不调模型）
 │   └── probe_vision.py   # 单独验证「下载 + 抽帧」链路
-├── tests/                # unittest 单元测试（304 个用例）
+├── tests/                # unittest 单元测试（280 个用例）
 ├── build.py              # 打发布包：dist/github.BsXinQin.bilibili_video_watch-<版本>.zip
 └── .github/workflows/    # GitHub Actions：每次 push 自动跑单元测试
 ```
@@ -567,7 +574,7 @@ github.BsXinQin.bilibili_video_watch/
 
 ## 测试与自检
 
-单元测试（304 个用例，不需要联网）：
+单元测试（280 个用例，不需要联网）：
 
 ```powershell
 # 用 MaiBot 所在环境的 python
@@ -588,7 +595,7 @@ python build.py
 
 CI：`.github/workflows/tests.yml` 在 push / PR 时用 Python 3.13 装依赖并跑同一套 `unittest`。
 
-覆盖：兴趣提取与打分、B 站客户端（httpx.MockTransport）、扫码登录、弹幕/评论解析与鱼灾过滤、抽帧帧选择、LLM 判断降级、人设读取与提示词注入、自动兴趣写回与锁定、人设兴趣种子、插件完整轮次、去重、冷却、重发（含白名单约束）、赤石（含全局屏蔽词）、指令（含白名单与参数解析）、类别级每轮上限、下载地址与 bvid 安全校验、配置模板与文档一致性，以及用宿主真实 `ManifestValidator` / `PluginLoader` 校验打包。
+覆盖：兴趣提取与打分、B 站客户端（httpx.MockTransport）、读视频（brief / full 两档、缓存、超长截断）、自动读（brief 不调视觉、@ 与关键词触发 full、去重按模式分键）、弹幕/评论解析与鱼灾过滤、抽帧帧选择、LLM 判断降级、人设读取与提示词注入、自动兴趣写回与锁定、人设兴趣种子、插件完整轮次、去重、冷却、重发（含白名单约束）、赤石（含全局屏蔽词）、工具（白名单与参数校验）、类别级每轮上限、下载地址与 bvid 安全校验、配置模板与文档一致性，以及用宿主真实 `ManifestValidator` / `PluginLoader` 校验打包。
 
 真实联网自检：
 
@@ -602,7 +609,7 @@ python tools/live_check.py 原神 --limit 2 --danmaku --parts
 # 走完整 LLM 判断（需要宿主环境能调 planner）
 python tools/live_check.py 原神 --limit 1 --llm
 
-# 验证 /赤石视频
+# 验证赤石（bili_shiwei）
 python tools/live_check.py --shiwei --limit 2 --parts
 
 # 单独验证下载 + 抽帧（不调 LLM）
@@ -618,8 +625,8 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 常见问题
 
-**Q：`/扫码登录` 没反应 / 收不到二维码图片？**
-确认插件已加载（`/bili-status` 有响应），并检查宿主是否提供 `send.image` 能力。图片发不出去时会自动改发登录链接文本，仍可用浏览器打开扫码。
+**Q：Cookie 填了还是读不到字幕？**
+先确认 Cookie 没有写错、没有多余换行；再把 `[advanced].debug` 打开，看启动时 nav 检查打出的登录名。字幕也不是每个视频都有——B 站只对上传过字幕的视频返回内容。
 
 **Q：登录成功了，但字幕还是读不到？**
 字幕是 B 站按视频和登录态返回的，不是每个视频都有（很多视频根本没上传字幕）。登录能显著提高覆盖率，但不能保证 100%。
@@ -628,13 +635,13 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 两种可能：① 你把 `auto_interests` 手动改过了，插件认为你接管了——清空它即可恢复自动维护；② 该流 `auto_interest = false` 或 `use_recent_chat = false`。
 
 **Q：某个群一直不分享？**
-用 `/bili-status` 看白名单是否包含它；用 `/bili-test` 看是否所有候选都被过滤或分数不够。`min_score` 过高、`require_interest_match = true` 且兴趣词太少都会导致选不出视频。
+先看 `[[streams]]` 白名单是否包含它、`enabled` 是否为 `true`；再把 `[advanced].debug` 打开，看候选是不是都被过滤或分数不够。`min_score` 过高、`require_interest_match = true` 且兴趣词太少都会导致选不出视频；也可以让麦麦用 `bili_search` 手动搜一条来验证链路。
 
 **Q：配置页显示的版本号对不上 GitHub 最新 Release？**
 配置页显示的是**当前安装的插件包**里的 `config_version`。宿主升级插件包后会自动把配置版本迁移到新版；如果市场还没收录新版本，需要等审核通过后从市场更新。
 
 **Q：读视频报「B 站接口返回 HTTP 412」？**
-412 是 B 站 WAF 层的风控拦截，不是接口参数错。常见原因是服务器（云主机 / 机房 IP）被风控，或者匿名请求没带 `buvid` Cookie。1.0.1 起插件会先自动申请 `buvid3`/`buvid4` 并重试一次；仍然 412 就在配置里填 `[account] cookie`（或聊天里发 `/扫码登录`），登录态能绕过大部分风控。填了 Cookie 还报 412，说明是该出口 IP 被限制，需要换网络或走代理。
+412 是 B 站 WAF 层的风控拦截，不是接口参数错。常见原因是服务器（云主机 / 机房 IP）被风控，或者匿名请求没带 `buvid` Cookie。1.0.1 起插件会先自动申请 `buvid3`/`buvid4` 并重试一次；仍然 412 就在 WebUI 的 `[account] cookie` 里填上浏览器 Cookie，登录态能绕过大部分风控。填了 Cookie 还报 412，说明是该出口 IP 被限制，需要换网络或走代理。
 
 **Q：换连接器 / 适配器后发不出去？**
 换账号后同一个群可能同时存在旧账号和新账号两套会话，宿主接口可能返回已掉线的那套。插件会枚举同群/同用户的会话，发送失败时自动换一个重试并记住可用的那个。
@@ -647,7 +654,8 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 - **字幕需要登录**：未登录时 B 站不返回字幕内容，只能靠标题/简介/弹幕/画面判断。
 - **排行榜接口**风控较严，未配 Cookie 时基本拿不到数据，所以默认关闭。
 - **抽帧依赖 ffmpeg**：都没有时自动跳过识图，其余流程正常。
-- **识图需要支持视觉的模型**：默认 `vlm` 任务；没有就把 `[vision].task_name` 改成支持图片的模型任务名，或关掉 `[vision].enabled`。
+- **识图需要支持视觉的模型**：自动分享入选视频与 full 读都会调它，默认 `vlm` 任务；没有就把 `[vision].task_name` 改成支持图片的模型任务名，或关掉 `[vision].enabled`（full 读仍可用，只是没有画面描述）。
+- **没有聊天指令**：平台会拦截 `/` 开头的消息，插件只提供 `bili_read` / `bili_search` / `bili_shiwei` 三个工具，由麦麦自己决定什么时候调用。
 - **LLM 判断有成本**：`llm_max_candidates` 控制每轮最多判断几个，默认 5。
 - **人设依赖宿主配置**：通过 `config.get` 读取；读不到时退回中性语气，不影响分享。
 - 分享的是**文本卡片 + 链接**，不会把视频文件发到群里。
@@ -658,11 +666,11 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v1.2.0**：删掉扫码登录与全部聊天指令（平台会拦截），读视频改成 brief / full 两档——别人贴链接默认 brief、不调视觉模型；@ 麦麦或说「详细看看」时切 full，带字幕时间轴、弹幕时间线并抽帧识图。分享默认只发一条简短消息（`intro_enabled` / `send_as_parts` / `narrative_enabled` 默认关闭）；主动搜索与赤石改成 `bili_search` / `bili_shiwei` 工具，白名单与冷却照旧。
 - **v1.1.0**：`bili_read` 增加 `detail="full"` 深度读——字幕带 `[分:秒]` 时间轴、弹幕按分钟聚合成时间线、热评 15 条、分P 全列、简介 800 字，输出上限 9000 字；同时修掉弹幕时间戳解析错误（以前全挤在 00:00）。
 - **v1.0.1**：修服务器 IP 撞上 B 站风控时读视频报 HTTP 412 的问题（自动申请 buvid Cookie 重试 + 可操作报错）。
 - **v1.0.0**：首个发布版本（本项目从上游「麦麦刷B站」2.1.2 起独立维护，版本号重新从 1.0.0 计；插件 id 不变，可直接覆盖升级）。
   - **定时刷 B 站**：抓热门 / 排行榜 / 搜索候选，LLM 按当前会话兴趣挑选后生成分享卡片发到白名单会话；兴趣可手写、可从聊天自动提取、可用人设初始兴趣兜底。
-  - **能读视频**：`bili_read` 工具与 `/读视频` 指令（别名 `/bili-read`），支持链接 / BV / av / 短链，返回简介、分P、CC 字幕、热评、弹幕采样；白名单会话里贴链接还会自动读进上下文。
-  - **扫码登录**：`/扫码登录`（仅私聊可用），扫码后 Cookie 自动写入 `[account].cookie` 并立即生效。
+  - **能读视频**：`bili_read` 工具，支持链接 / BV / av / 短链，返回简介、分P、CC 字幕、热评、弹幕采样；白名单会话里贴链接还会自动读进上下文。
   - **稳定性**：包内相对导入 + 顶层导入兜底、`get_components()` 提升 `chat_scope`、`bili_read` 对 Planner 直接可见（不再被派给子代理空转等待）。
   - 上游 2.x 的历史记录见 [CHANGELOG-upstream.md](CHANGELOG-upstream.md)，本版完整说明见 [CHANGELOG.md](CHANGELOG.md)。

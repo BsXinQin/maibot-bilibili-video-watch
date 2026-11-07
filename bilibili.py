@@ -506,7 +506,7 @@ class _BilibiliClientBase:
         if response.status_code == 412:
             raise BilibiliError(
                 "B 站接口返回 HTTP 412（风控拦截）：这台服务器的网络环境被 B 站限制了。"
-                "可以在插件配置的「账号登录 → B 站 Cookie」里填上 Cookie（或在聊天里发 /扫码登录 扫码），"
+                "可以在插件配置的「账号登录 → B 站 Cookie」里填上浏览器 Cookie，"
                 "再读一次；填了 Cookie 仍然 412 就说明是该服务器 IP 被风控，需要换网络或走代理。"
             )
         if response.status_code != 200:
