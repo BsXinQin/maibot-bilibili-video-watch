@@ -170,8 +170,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         subtitle="",
         frames_desc="",
         persona_block=block,
-        intro_enabled=True,
-        intro_max_chars=40,
     )
     print("\n=== 注入人设后的判断 prompt（节选） ===")
     print(

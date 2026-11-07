@@ -21,7 +21,7 @@
     }
 
 - ``videos`` 就是「已经刷过的视频名单」：名单里的视频不会再被抓取/主动分享，
-  但可以通过自然语言或 ``/bili-reshare`` 用缓存里的总结再次分享。
+  再次遇到同一条视频时会被去重跳过。
 - ``cooldowns`` 记录「主动搜索」与「赤石视频」各自的冷却时间。
 - ``auto_interests`` 记录插件上次写进 ``config.toml`` 的自动兴趣词，
   用来判断用户之后有没有手改过（手改过就不再自动覆盖）。
@@ -200,15 +200,14 @@ class SeenStore:
         narrative: str = "",
         summary: str = "",
         points: Optional[Sequence[str]] = None,
-        intro: str = "",
         frames: str = "",
         kind: str = "auto",
         stream_id: str = "",
         now: Optional[float] = None,
     ) -> None:
-        """记录一次分享（视频信息 + 缓存介绍文案，供之后重发复用）。
+        """记录一次分享（视频信息 + 当时的文案）。
 
-        ``narrative`` 是分享时实际发出去的那段自然语言介绍；``summary``/``points``
+        ``narrative`` 是分享时实际发出去的那句随口话；``summary``/``points``
         保留给旧数据（v0.3 及更早）兼容。
         """
 
@@ -232,8 +231,6 @@ class SeenStore:
             record["summary"] = summary
         if points:
             record["points"] = [str(item) for item in points][:8]
-        if intro:
-            record["intro"] = intro
         if frames:
             record["frames"] = frames
         streams = record.get("streams")
@@ -249,51 +246,6 @@ class SeenStore:
 
     def all_videos(self) -> Dict[str, Dict[str, Any]]:
         return {bvid: dict(record) for bvid, record in self._videos.items()}
-
-    def find_by_query(
-        self,
-        query: str,
-        *,
-        limit: int = 5,
-        window_days: float = 60.0,
-        min_score: float = 0.25,
-        now: Optional[float] = None,
-    ) -> List[Tuple[float, Dict[str, Any]]]:
-        """按聊天里的自然语言模糊匹配历史分享记录。
-
-        打分方式：查询词与标题/UP 名的字符二元组重合度（0~1），
-        再叠加「越近分享越高」的小幅加成。
-        """
-
-        now = time.time() if now is None else now
-        window = max(1.0, float(window_days)) * 86400.0
-        query_grams = _char_grams(_clean_query(query))
-        if not query_grams:
-            return []
-
-        scored: List[Tuple[float, Dict[str, Any]]] = []
-        for bvid, record in self._videos.items():
-            last = float(record.get("last_shared") or record.get("first_seen") or 0.0)
-            if now - last > window:
-                continue
-            haystack = " ".join(
-                str(record.get(key) or "")
-                for key in ("title", "owner", "partition")
-            )
-            hay_grams = _char_grams(haystack)
-            if not hay_grams:
-                continue
-            overlap = len(query_grams & hay_grams)
-            if not overlap:
-                continue
-            similarity = overlap / float(len(query_grams))
-            if similarity < min_score:
-                continue
-            freshness = max(0.0, 1.0 - (now - last) / window) * 0.2
-            scored.append((similarity + freshness, dict(record, bvid=bvid)))
-
-        scored.sort(key=lambda item: -item[0])
-        return scored[: max(1, int(limit))]
 
     # ------------------------------------------------------------------
     # 冷却

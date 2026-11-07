@@ -15,8 +15,7 @@
 - ``[filter]``：视频硬过滤条件（时长、播放量、屏蔽词、官方内容排除等）
 - ``[scoring]``：打分权重与入选阈值
 - ``[persona]``：分享文案使用 MaiBot 配置的人设语气
-- ``[share]``：分享格式（随口一提 / 分条发送）
-- ``[reshare]``：自然语言「再发一遍」重发
+- ``[share]``：分享格式（随口一句 + 标题链接）
 - ``[shiwei]``：赤石视频工具专用配置
 - ``[advanced]``：数据目录、超时、去重等运行参数
 - ``[[streams]]``：白名单聊天流（数组表），每个流可单独配置兴趣与分享上限
@@ -42,7 +41,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.2.1",
+        default="1.3.0",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -640,110 +639,17 @@ class ShareConfig(PluginConfigBase):
     __ui_icon__ = "send"
     __ui_order__ = 11
 
-    casual_mode: bool = Field(
-        default=True,
-        description=(
-            "「随口一提」模式：把一句话和【标题】链接合成一条消息，语气像群里随口说话，"
-            "不宣布「我要分享/推荐」这种意图；关闭则回到「推荐语 / 标题链接 / 介绍」分条格式"
-        ),
-        json_schema_extra={"label": "随口一提模式"},
-    )
     casual_max_chars: int = Field(
         default=60,
         ge=20,
         le=160,
-        description="随口一句的最大字数（仅「随口一提」模式生效）",
+        description="分享时那句随口话的最大字数（超长会截断）",
         json_schema_extra={"label": "随口一句字数上限"},
-    )
-    intro_enabled: bool = Field(
-        default=False,
-        description="是否先用一句人设口吻的推荐语开场（仅关闭「随口一提」模式时生效；默认关，只要简短介绍）",
-        json_schema_extra={"label": "发送推荐语"},
-    )
-    intro_max_chars: int = Field(
-        default=40,
-        ge=10,
-        le=120,
-        description="推荐语的最大字数",
-        json_schema_extra={"label": "推荐语字数上限"},
-    )
-    send_as_parts: bool = Field(
-        default=False,
-        description="是否分条发送：①推荐语 ②【标题】链接 ③一段自然语言介绍；默认关，合成一条消息（「随口一提」模式下始终只发一条）",
-        json_schema_extra={"label": "分条发送"},
-    )
-    part_delay_seconds: float = Field(
-        default=0.8,
-        ge=0.0,
-        le=10.0,
-        description="分条发送之间的间隔秒数",
-        json_schema_extra={"label": "分条间隔（秒）"},
-    )
-    narrative_enabled: bool = Field(
-        default=False,
-        description=(
-            "是否发一段人设口吻的自然语言介绍（把「讲了什么」和「有什么好看」揉在一起，"
-            "不用「内容：」「看点：」这类格式；仅关闭「随口一提」模式时生效）"
-        ),
-        json_schema_extra={"label": "发送自然语言介绍"},
-    )
-    narrative_max_chars: int = Field(
-        default=160,
-        ge=40,
-        le=500,
-        description="自然语言介绍的最大字数",
-        json_schema_extra={"label": "介绍字数上限"},
     )
     include_stats_line: bool = Field(
         default=False,
-        description="是否在链接消息里附带 UP / 时长 / 播放量等信息",
+        description="是否在标题链接后面附带播放量 / 点赞 / UP 主信息",
         json_schema_extra={"label": "附带视频信息"},
-    )
-
-
-class ReshareConfig(PluginConfigBase):
-    """自然语言「再发一遍」。"""
-
-    __ui_label__ = "重发"
-    __ui_icon__ = "repeat"
-    __ui_order__ = 12
-
-    enabled: bool = Field(
-        default=True,
-        description="是否允许在聊天里用自然语言要求重发之前分享过的视频（如「你之前发的那个XX再发一遍」）",
-        json_schema_extra={"label": "启用自然语言重发"},
-    )
-    trigger_keywords: List[str] = Field(
-        default_factory=lambda: [
-            "再发一遍", "再发一次", "再分享", "重新发", "再来一遍", "再放一次",
-            "再发下", "重发", "发一遍", "发一次",
-        ],
-        description="触发重发的关键词",
-        json_schema_extra={"label": "触发关键词"},
-    )
-    history_keywords: List[str] = Field(
-        default_factory=lambda: ["之前", "上次", "那个", "刚才", "你发过", "你分享过", "前面"],
-        description="配合触发词使用，表示「指代之前分享过的视频」",
-        json_schema_extra={"label": "指代关键词"},
-    )
-    match_window_days: float = Field(
-        default=60.0,
-        ge=1.0,
-        le=365.0,
-        description="在多长时间内的分享记录里查找",
-        json_schema_extra={"label": "查找记录天数"},
-    )
-    min_match_score: float = Field(
-        default=0.25,
-        ge=0.0,
-        le=1.0,
-        description="标题模糊匹配的最低相似度",
-        json_schema_extra={"label": "最低匹配相似度"},
-    )
-    reply_enabled: bool = Field(
-        default=True,
-        description="重发时是否附带一句说明",
-        json_schema_extra={"label": "重发时附带说明"},
     )
 
 
@@ -1111,11 +1017,7 @@ class BilibiliInterestShareConfig(PluginConfigBase):
     )
     share: ShareConfig = Field(
         default_factory=ShareConfig,
-        description="分享格式（随口一提、分条发送、自然语言介绍）",
-    )
-    reshare: ReshareConfig = Field(
-        default_factory=ReshareConfig,
-        description="自然语言重发（聊天里说「把之前那个再发一遍」）",
+        description="分享格式（随口一句 + 标题链接）",
     )
     shiwei: ShiweiConfig = Field(
         default_factory=ShiweiConfig,

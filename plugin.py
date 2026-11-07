@@ -6,7 +6,7 @@
 - LLM 语义判断，按人设口吻生成简短介绍；
 - 排除主流官方物料，按「新鲜资讯 / 社区创作 / 玩家投稿 / 外网搬运」分类抓取；
 - 自动分享与主动搜索各自独立冷却；
-- 已刷名单：名单内视频不再自动分享，但可被要求重发（复用缓存的介绍）；
+- 已刷名单：名单内视频不再自动分享；
 - ``bili_read`` 工具：别人贴链接自动 brief 快速读，@ 机器人或说「详细看看」时 full 深度读并抽帧；
 - ``bili_search`` / ``bili_shiwei`` 工具：主动搜索分享、赤石整活视频。
 
@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import random
@@ -29,10 +30,10 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from maibot_sdk import HookHandler, MaiBotPlugin, Tool
 
 try:  # 文档推荐的导入路径（HookMode / ToolParameterInfo 都定义在 types 里）
-    from maibot_sdk.types import HookMode, ToolParameterInfo, ToolParamType
+    from maibot_sdk.types import ErrorPolicy, HookMode, ToolParameterInfo, ToolParamType
 except ImportError:  # 兼容把 HookMode 只在 components 里导出的旧版本 SDK
     from maibot_sdk.components import HookMode
-    from maibot_sdk.types import ToolParameterInfo, ToolParamType
+    from maibot_sdk.types import ErrorPolicy, ToolParameterInfo, ToolParamType
 
 try:  # 宿主正常按包加载插件
     from .bilibili import BilibiliClient, BilibiliError, NAV_URL, Video, merge_videos
@@ -189,26 +190,108 @@ def _in_active_window(value: str, *, now: Optional[datetime] = None) -> bool:
     return minute >= start or minute < end
 
 
-def _message_text(message: Dict[str, Any]) -> str:
-    """从宿主序列化的消息 dict 里取纯文本。"""
+def _structured_payload_text(value: Any, depth: int = 0) -> str:
+    """从结构化消息段（B 站小程序卡片等）里挖出字符串。"""
+
+    if value is None or depth > 5:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        if text[:1] in "{[":
+            try:
+                return _structured_payload_text(json.loads(text), depth + 1)
+            except (TypeError, ValueError):
+                pass
+        return text
+    if isinstance(value, dict):
+        return " ".join(_structured_payload_text(item, depth + 1) for item in value.values())
+    if isinstance(value, list):
+        return " ".join(_structured_payload_text(item, depth + 1) for item in value)
+    if isinstance(value, bool):
+        return ""
+    return str(value)
+
+
+def _message_text(message: Any) -> str:
+    """从宿主序列化的消息 dict 里取纯文本。
+
+    宿主把文本段写成 {"type": "text", "data": "正文"}（data 是字符串），
+    这里两种形态都要认；plain_text 是老字段，顺带兼容。
+    """
 
     if not isinstance(message, dict):
         return ""
-    text = message.get("processed_plain_text")
-    if isinstance(text, str) and text.strip():
-        return text.strip()
-    parts: List[str] = []
+    for key in ("processed_plain_text", "plain_text"):
+        text = message.get(key)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
     raw = message.get("raw_message")
+    if isinstance(raw, str):
+        return raw.strip()
+    parts: List[str] = []
     if isinstance(raw, list):
         for item in raw:
             if not isinstance(item, dict):
                 continue
             data = item.get("data")
-            if isinstance(data, dict) and isinstance(data.get("text"), str):
-                parts.append(data["text"])
+            if isinstance(data, str):
+                if data.strip():
+                    parts.append(data)
+            elif isinstance(data, dict):
+                text = data.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
             elif isinstance(item.get("text"), str):
                 parts.append(item["text"])
     return "".join(parts).strip()
+
+
+def _message_link_text(message: Any) -> str:
+    """取消息里可能带 B 站链接的文本：纯文本不够时再挖小程序卡片。"""
+
+    text = _message_text(message)
+    if not isinstance(message, dict) or _BILI_URL_RE.search(text):
+        return text
+    extras: List[str] = []
+    raw = message.get("raw_message")
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "").lower() in {"text", "plain_text"}:
+                continue
+            extra = _structured_payload_text(item.get("data"))
+            if extra:
+                extras.append(extra)
+    info = message.get("message_info")
+    additional = info.get("additional_config") if isinstance(info, dict) else None
+    if isinstance(additional, dict):
+        extra = _structured_payload_text(additional.get("platform_card_payloads"))
+        if extra:
+            extras.append(extra)
+    joined = " ".join(part for part in extras if part)
+    if joined and _BILI_URL_RE.search(joined):
+        logger.debug("从结构化消息段里找到 B 站链接")
+        return f"{text} {joined}".strip()
+    return text
+
+
+def _message_group_id(message: Any) -> str:
+    """从消息字典里取群号（私聊返回空串）。"""
+
+    if not isinstance(message, dict):
+        return ""
+    info = message.get("message_info")
+    if isinstance(info, dict):
+        group = info.get("group_info")
+        if isinstance(group, dict):
+            value = str(group.get("group_id") or "").strip()
+            if value:
+                return value
+    value = str(message.get("group_id") or "").strip()
+    return value
 
 
 def _message_mentions_me(message: Dict[str, Any]) -> bool:
@@ -328,20 +411,6 @@ def filter_messages_by_lookback(
         if stamp is None or stamp >= cutoff:
             kept.append(message)
     return kept
-
-
-def _video_from_record(record: Dict[str, Any]) -> Video:
-    """把已刷名单里的记录还原成 :class:`Video`（用于重发）。"""
-
-    return Video(
-        bvid=str(record.get("bvid") or ""),
-        title=str(record.get("title") or ""),
-        description="",
-        owner=str(record.get("owner") or ""),
-        partition=str(record.get("partition") or ""),
-        duration=int(record.get("duration") or 0),
-        source="history",
-    )
 
 
 def format_share_header(video: Video) -> str:
@@ -761,29 +830,21 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         picked = await self._pick_candidates(results, profile, limit)
         shared: List[str] = []
         for result, judged in picked:
-            narrative_text, intro_text = "", ""
-            if judged:
-                narrative_text = str(judged.get("narrative") or "").strip()
-                intro_text = str(judged.get("intro") or "").strip()
-            if not narrative_text and config.share.narrative_enabled:
-                fallback_limit = (
-                    config.share.casual_max_chars
-                    if config.share.casual_mode
-                    else config.share.narrative_max_chars
-                )
-                narrative_text = (result.video.description or "").strip()[:fallback_limit]
+            narrative_text = str((judged or {}).get("narrative") or "").strip()
+            if not narrative_text:
+                narrative_text = (result.video.description or "").strip()[
+                    : int(config.share.casual_max_chars)
+                ]
             sent = await self._send_parts(
                 stream_id,
                 result.video,
                 narrative_text,
                 kind="auto",
-                intro=intro_text,
             )
             if sent:
                 self._store.mark_shared(
                     result.video,
                     narrative=narrative_text,
-                    intro=intro_text,
                     kind="auto",
                     stream_id=stream_id,
                 )
@@ -849,10 +910,6 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 danmaku=danmaku,
                 comments=comments,
                 subtitle=subtitle,
-                narrative_max_chars=config.share.narrative_max_chars,
-                intro_enabled=config.share.intro_enabled,
-                intro_max_chars=config.share.intro_max_chars,
-                casual_mode=config.share.casual_mode,
                 casual_max_chars=config.share.casual_max_chars,
             )
             if judged is not None:
@@ -878,10 +935,6 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                             comments=comments,
                             subtitle=subtitle,
                             frames_desc=frames_desc,
-                            narrative_max_chars=config.share.narrative_max_chars,
-                            intro_enabled=config.share.intro_enabled,
-                            intro_max_chars=config.share.intro_max_chars,
-                            casual_mode=config.share.casual_mode,
                             casual_max_chars=config.share.casual_max_chars,
                         )
                         if refined is not None:
@@ -1086,7 +1139,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
     async def _refresh_allowed_streams(self) -> Set[str]:
         """解析白名单里所有启用的会话，缓存可用的 stream_id 集合。
 
-        重发（reshare）等被动触发的发送只允许落在白名单会话里，
+        聊天里贴链接自动读这类被动行为只允许落在白名单会话里，
         这个集合就是判断依据。
         """
 
@@ -1618,53 +1671,22 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         narrative: str,
         *,
         kind: str = "auto",
-        intro: str = "",
     ) -> bool:
-        """发送分享消息。
+        """发送分享消息：一句随口的话 + 【标题】链接，合成一条。
 
-        - 「随口一提」模式（``[share].casual_mode``，默认开）：把一句随口的话和
-          【标题】链接合成**一条**消息，像群里顺嘴提一句，不摆出「我在分享」的架势。
-        - 关闭时按「推荐语 / 标题+链接 / 自然语言介绍」分条发送。
+        赤石（kind="shiwei"）不带文案，只发标题链接。
         """
 
         config = self.config
-        if kind != "shiwei" and config.share.casual_mode:
-            line = (narrative or "").strip()
-            header = format_share_header(video)
-            message = f"{line} {header}" if line else header
-            if config.share.include_stats_line:
-                message += (
-                    f"\n🔥 {video.play} 播放 · {video.like} 点赞"
-                    + (f" · UP：{video.owner}" if video.owner else "")
-                )
-            return await self._send_text(stream_id, message)
-
-        parts: List[str] = []
-        if kind != "shiwei" and config.share.intro_enabled:
-            intro_text = (intro or "").strip()
-            if intro_text:
-                parts.append(intro_text)
-        parts.append(format_share_header(video))
-        if kind != "shiwei" and config.share.narrative_enabled:
-            body = (narrative or "").strip()
-            if body:
-                parts.append(body)
+        line = "" if kind == "shiwei" else (narrative or "").strip()
+        header = format_share_header(video)
+        message = f"{line} {header}" if line else header
         if config.share.include_stats_line:
-            parts.append(
-                f"🔥 {video.play} 播放 · {video.like} 点赞"
+            message += (
+                f"\n🔥 {video.play} 播放 · {video.like} 点赞"
                 + (f" · UP：{video.owner}" if video.owner else "")
             )
-
-        if not config.share.send_as_parts:
-            return await self._send_text(stream_id, "\n".join(parts))
-
-        sent_any = False
-        for index, part in enumerate(parts):
-            if await self._send_text(stream_id, part):
-                sent_any = True
-            if index < len(parts) - 1 and config.share.part_delay_seconds > 0:
-                await asyncio.sleep(float(config.share.part_delay_seconds))
-        return sent_any
+        return await self._send_text(stream_id, message)
 
     # -- 主动搜索 ------------------------------------------------------
 
@@ -1737,8 +1759,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                     stream_id,
                     video,
                     str(cached.get("narrative") or cached.get("summary") or ""),
-                    kind="reshare",
-                    intro=str(cached.get("intro") or ""),
+                    kind="search",
                 )
                 shared.append(video.bvid)
                 continue
@@ -1751,32 +1772,20 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                     danmaku=danmaku,
                     comments=comments,
                     subtitle=subtitle,
-                    narrative_max_chars=config.share.narrative_max_chars,
-                    intro_enabled=config.share.intro_enabled,
-                    intro_max_chars=config.share.intro_max_chars,
-                    casual_mode=config.share.casual_mode,
                     casual_max_chars=config.share.casual_max_chars,
                 )
-            fallback_limit = (
-                config.share.casual_max_chars
-                if config.share.casual_mode
-                else config.share.narrative_max_chars
-            )
             narrative_text = str((judged or {}).get("narrative") or "") or (
                 video.description or ""
-            )[:fallback_limit]
-            intro_text = str((judged or {}).get("intro") or "")
+            )[: int(config.share.casual_max_chars)]
             if await self._send_parts(
                 stream_id,
                 video,
                 narrative_text,
                 kind="search",
-                intro=intro_text,
             ):
                 self._store.mark_shared(
                     video,
                     narrative=narrative_text,
-                    intro=intro_text,
                     kind="search",
                     stream_id=stream_id,
                 )
@@ -2025,7 +2034,42 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             return False
         return True
 
-    async def _maybe_auto_read(self, message: Dict[str, Any]) -> None:
+    async def _stream_scope_for_message(self, stream_id: str, message: Any) -> str:
+        """判断消息所在会话是不是白名单里的启用会话。
+
+        返回 "group" / "private" / ""。除了核对已解析的 stream_id，
+        还会拿消息里的群号 / 用户号去比配置——新群第一条消息时宿主
+        可能还没来得及登记会话，这时 stream_id 是查不到的。
+        """
+
+        config = self.config
+        group_id = _message_group_id(message)
+        user_id = _message_user_id(message)
+        matched = None
+        for target in config.streams or []:
+            if not getattr(target, "enabled", False):
+                continue
+            target_group = str(getattr(target, "group_id", "") or "").strip()
+            target_user = str(getattr(target, "user_id", "") or "").strip()
+            if target_group and group_id and target_group == group_id:
+                matched = target
+                break
+            if target_user and not group_id and target_user == user_id:
+                matched = target
+                break
+        if matched is not None:
+            is_private = bool(
+                str(getattr(matched, "user_id", "") or "").strip()
+            ) and not str(getattr(matched, "group_id", "") or "").strip()
+            return "private" if is_private else "group"
+        allowed = await self._ensure_allowed_streams()
+        if stream_id in allowed:
+            return "private" if stream_id in self._private_stream_ids else "group"
+        return ""
+
+    async def _maybe_auto_read(
+        self, message: Any, kwargs: Optional[Dict[str, Any]] = None
+    ) -> None:
         """白名单会话里有人贴 B 站链接时，自动读一遍塞进上下文。"""
 
         config = self.config
@@ -2033,24 +2077,35 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             return
         if not config.read.auto_read_enabled:
             return
-        text = _message_text(message)
+        text = _message_link_text(message)
         if not text or text.startswith("【"):  # 跳过插件自己发的分享消息
             return
         targets = extract_targets(text, limit=int(config.read.auto_read_max_links))
         if not targets:
             return
         stream_id = _stream_id_of(message)
+        if not stream_id and isinstance(kwargs, dict):
+            for key in ("stream_id", "session_id"):
+                value = kwargs.get(key)
+                if isinstance(value, str) and value.strip():
+                    stream_id = value.strip()
+                    break
         if not stream_id:
+            logger.debug("自动读：消息里取不到会话 id，跳过")
             return
-        allowed = await self._ensure_allowed_streams()
-        if stream_id not in allowed:
+        scope = await self._stream_scope_for_message(stream_id, message)
+        if not scope:
             logger.debug("会话 %s 不在白名单，跳过自动读视频", stream_id)
             return
 
         deep = wants_full_read(message, text, config.read.full_trigger_keywords)
         # 私聊里没有 @ 这种操作，对着麦麦贴链接本身就是「特意让我看」，默认深度读
-        if not deep and getattr(config.read, "full_in_private", False):
-            deep = stream_id in self._private_stream_ids
+        if (
+            not deep
+            and getattr(config.read, "full_in_private", False)
+            and scope == "private"
+        ):
+            deep = True
         mode = "full" if deep else "brief"
         now = time.time()
         window = max(60.0, float(config.read.cache_seconds))
@@ -2138,77 +2193,25 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             self._vision_cache[cache_key] = (time.time(), description)
         return description
 
-    # -- 重发（聊天自然语言触发） --------------------------------------
+    # -- 聊天消息：贴链接自动读 ----------------------------------------
 
     @HookHandler(
-        "chat.receive.before_process",
+        "chat.receive.after_process",
         mode=HookMode.OBSERVE,
-        description="识别「再发一遍之前那个视频」这类请求，复用缓存总结重发",
+        description="群友贴 B 站链接时自动读一遍，把标题/简介/弹幕/评论塞进上下文",
+        timeout_ms=180000,
+        error_policy=ErrorPolicy.LOG,
     )
     async def on_chat_receive(
-        self, hook_name: str, message: Dict[str, Any], **kwargs: Any
+        self, message: Any = None, **kwargs: Any
     ) -> None:
-        del hook_name, kwargs
         try:
-            await self._maybe_reshare(message)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - Hook 里不能抛错
-            logger.debug("重发意图识别失败：%s", exc)
-        try:
-            await self._maybe_auto_read(message)
+            await self._maybe_auto_read(message, kwargs)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - Hook 里不能抛错
             logger.debug("自动读视频失败：%s", exc)
         return None
-
-    async def _maybe_reshare(self, message: Dict[str, Any]) -> None:
-        config = self.config
-        if not config.plugin.enabled or not config.reshare.enabled:
-            return
-        if self._store is None:
-            return
-        text = _message_text(message)
-        if not text or len(text) > 80:
-            return
-        if text.startswith("【"):  # 跳过插件自己发的分享消息
-            return
-        if not any(keyword in text for keyword in config.reshare.trigger_keywords):
-            return
-        if not any(keyword in text for keyword in config.reshare.history_keywords):
-            return
-        stream_id = _stream_id_of(message)
-        if not stream_id:
-            return
-        # 只在白名单会话里重发：这个 Hook 是聊天消息触发的被动发送，
-        # 必须确认当前会话确实是配置里启用的白名单会话。
-        allowed = await self._ensure_allowed_streams()
-        if stream_id not in allowed:
-            logger.debug("会话 %s 不在白名单，忽略重发请求", stream_id)
-            return
-        matches = self._store.find_by_query(
-            text,
-            limit=1,
-            window_days=config.reshare.match_window_days,
-            min_score=config.reshare.min_match_score,
-        )
-        if not matches:
-            return
-        _score, record = matches[0]
-        video = _video_from_record(record)
-        if not video.bvid or not video.title:
-            return
-        sent = await self._send_parts(
-            stream_id,
-            video,
-            str(record.get("narrative") or record.get("summary") or ""),
-            kind="reshare",
-            intro=str(record.get("intro") or ""),
-        )
-        if sent and config.reshare.reply_enabled:
-            await self._send_text(stream_id, "好嘞，再发一遍～")
-        logger.info("按用户要求重发了 %s（%s）", video.bvid, video.title)
 
     # -- 工具：主动搜索 / 赤石（聊天指令会被平台拦截，改由模型调用工具） --
 

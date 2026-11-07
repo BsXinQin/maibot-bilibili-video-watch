@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.2.1-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.3.0-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v1.2.1** · 全部配置项已中文化 · 手动填 Cookie 登录 · 读视频分 brief / full 两档
+> 当前版本 **v1.3.0** · 全部配置项已中文化 · 手动填 Cookie 登录 · 读视频分 brief / full 两档
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -32,7 +32,6 @@
   - [`[scoring]` 打分](#scoring-打分)
   - [`[persona]` 人设语气](#persona-人设语气)
   - [`[share]` 分享格式](#share-分享格式)
-  - [`[reshare]` 自然语言重发](#reshare-自然语言重发)
   - [`[shiwei]` 赤石视频](#shiwei-赤石视频)
   - [`[read]` 读视频](#read-读视频)
   - [`[advanced]` 运行参数](#advanced-运行参数)
@@ -63,7 +62,6 @@
 | **噪声过滤** | 硬过滤（时长/播放/点赞/屏蔽词/官方内容）+ AI 鱼灾式模板弹幕评论过滤 |
 | **去重** | 分享过的视频记入名单，默认 30 天内不再自动分享 |
 | **主动搜索** | 麦麦可以自己调 `bili_search` 工具按关键词搜一条并分享，独立冷却（默认 5 分钟），不影响自动频率 |
-| **自然语言重发** | 聊天里说「你之前发的那个 XX 再发一遍」，从历史记录里找回并复用当时的文案 |
 | **赤石视频** | 麦麦可以调 `bili_shiwei` 工具抓一个抽象整活视频，只发标题+链接，不带介绍 |
 | **能读视频** | `bili_read` 工具 + 白名单会话里**贴链接自动读**（brief：简介、分P、字幕节选、热评、弹幕，不调视觉模型）；有人 @ 麦麦或说「详细看看」时自动切 full：字幕时间轴、弹幕时间线、更多热评，并**抽帧看画面**；私聊里贴链接默认就走 full |
 | **人设语气** | 推荐语与介绍按 MaiBot 的**麦麦人设**口吻生成，可覆盖、可关 |
@@ -73,26 +71,22 @@
 
 ## 分享效果
 
-默认只发**一条简短消息**：一句人设口吻的随口评价 + 标题 + 链接，不再追加长介绍（`[share]` 里的 `intro_enabled` / `send_as_parts` / `narrative_enabled` 默认都是 `false`）：
+每条分享固定是**一条消息**：一句人设口吻的随口评价 + 【标题】链接。
 
 ```
 呜哇这个我也刷到了，几套新配队思路比我自己瞎搭的强多了
 【【原神】5.2 深渊满星配队实测】 https://www.bilibili.com/video/BV1xxxxxxxxx
 ```
 
-想要更完整的安利时，把 `[share].intro_enabled`、`send_as_parts`、`narrative_enabled` 打开（并关掉 `casual_mode`），就会变回「推荐语 / 标题+链接 / 介绍」分条发送：
+想带上数据，把 `[share].include_stats_line` 打开，会在链接后面补一行播放量 / 点赞 / UP 主：
 
 ```
 来了来了，这个我之前刷到过
-
-【【原神】5.2 深渊满星配队实测】
-https://www.bilibili.com/video/BV1xxxxxxxxx
-
-这期把新版本的角色和玩法都聊透了，几套配队思路挺有参考价值，
-看到一半我就想去试试了
+【【原神】5.2 深渊满星配队实测】 https://www.bilibili.com/video/BV1xxxxxxxxx
+🔥 36.9万 播放 · 2.8万 点赞 · UP：无优i1
 ```
 
-文案全部由 LLM 按 MaiBot 的人设口吻生成，**不是模板套话**；没有可用 LLM 时退回视频简介原文，不会发不出去。
+那句随口话由 LLM 按 MaiBot 的人设口吻生成，**不是模板套话**；模型会被告知不要用「推荐」「分享」「安利」「值得一看」「大家快看」这类词，可以带吐槽、情绪或疑问。没有可用 LLM 时退回视频简介原文（同样截到「随口一句字数上限」），不会发不出去。
 
 ---
 
@@ -163,7 +157,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.2.1"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.3.0"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -343,49 +337,12 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `casual_mode` | `true` | **「随口一提」模式**：一句话 + 【标题】链接合成**一条**消息，像群里顺嘴提一句 |
-| `casual_max_chars` | `60` | 随口一句的字数上限（仅 `casual_mode = true` 时生效） |
-| `intro_enabled` | `false` | 是否先发一句**人设口吻的推荐语**（默认关，关掉「随口一提」后才有意义） |
-| `intro_max_chars` | `40` | 推荐语字数上限 |
-| `send_as_parts` | `false` | 分条发送（默认关，关掉「随口一提」后才有意义） |
-| `part_delay_seconds` | `0.8` | 分条之间的间隔 |
-| `narrative_enabled` | `false` | 是否发一段人设口吻的**自然语言介绍**（默认关，关掉「随口一提」后才有意义） |
-| `narrative_max_chars` | `160` | 介绍文案字数上限 |
-| `include_stats_line` | `false` | 消息里是否附 UP / 时长 / 播放 |
+| `casual_max_chars` | `60` | 那句随口话的字数上限（`20`~`160`） |
+| `include_stats_line` | `false` | 链接后面是否附一行播放量 / 点赞 / UP 主 |
 
-**默认「随口一提」**（`casual_mode = true`，且 `intro_enabled` / `send_as_parts` / `narrative_enabled` 都是 `false`）只发一条消息，语气是「刚好刷到、顺嘴说一句」：
+分享永远是**一条消息**「随口一句 + 【标题】链接」，不分条、也不再单独发推荐语或长介绍——那几个开关在「随口一提」下本来就被短路，留着只会让人以为改了有用，所以 1.3.0 全部删掉了。
 
-```
-这期把新版本的角色和玩法都聊透了，看到一半我就想去试试了 【标题】 https://www.bilibili.com/video/BVxxxx
-```
-
-模型会被告知不要用「推荐」「分享」「安利」「值得一看」「大家快看」这类词，可以带吐槽、情绪或疑问——读起来更像群友闲聊，而不是机器人在按流程发内容。
-
-**把三项都打开**（`casual_mode = false`）回到分条格式：
-
-```
-第 1 条：呜哇，这个必须拉你们一起看！            ← 推荐语（LLM 按人设生成）
-第 2 条：【标题】 https://www.bilibili.com/video/BVxxxx
-第 3 条：这期把新版本的角色和玩法都聊透了，几个新配队思路挺有参考价值，
-        看到一半我就想去试试了 (｡･ω･｡)          ← 自然语言介绍（LLM 按人设生成）
-```
-
-介绍不是固定模板：模型会讲清「讲了什么 + 哪里有意思」，不分点、不加编号、不带「内容：」「看点：」这类前缀。没有 LLM 可用时退回视频简介原文。
-
-### `[reshare]` 自然语言重发
-
-| 键 | 默认 | 说明 |
-| --- | --- | --- |
-| `enabled` | `true` | 是否允许在聊天里用自然语言让机器人重发分享过的视频 |
-| `trigger_keywords` | 见配置 | 触发词，消息里要出现其中之一（再发一遍/重发/再分享…） |
-| `history_keywords` | 见配置 | 指代词，消息里还要出现其中之一（之前/上次/那个/你发过…） |
-| `match_window_days` | `60` | 在多长时间内的分享记录里查找（天） |
-| `min_match_score` | `0.25` | 标题模糊匹配的最低相似度（0~1，越低越宽松） |
-| `reply_enabled` | `true` | 重发后是否回一句确认（如「好嘞，再发一遍～」） |
-
-同时命中「触发词 + 指代词」才会触发，避免误判；重发时**直接复用当时存下的介绍文案和推荐语**，不重新生成。
-
-> 重发**只对白名单会话（`[[streams]]`）生效**，避免插件变成任意群都能指挥的转发器。
+字数上限管两头：LLM 生成的那句话会被截到这个长度；没有 LLM 可用时，退回的视频简介也会被截到这个长度。
 
 ### `[shiwei]` 赤石视频
 
@@ -537,8 +494,8 @@ max_share_per_round = 0           # 该流每轮最多几个，0 = 用 [schedule
 }
 ```
 
-- 名单里的视频**不会再被自动抓取/分享**，但仍可通过自然语言要求重发
-- 每条分享记录保存了当时的 `narrative`（介绍文案）与 `intro`（推荐语），重发时直接复用；旧版本留下的 `summary` / `points` 仍兼容读取
+- 名单里的视频**不会再被自动抓取/分享**
+- 每条分享记录保存了当时的 `narrative`（发出去的那句随口话）；旧版本留下的 `summary` / `points` / `intro` 仍兼容读取
 - `auto_interests` 记录「插件上次写了什么」，用来判断你有没有手动改过
 - 删除 `state.json` 等于「忘掉所有历史」，下次会重新分享
 
@@ -596,7 +553,7 @@ python build.py
 
 CI：`.github/workflows/tests.yml` 在 push / PR 时用 Python 3.13 装依赖并跑同一套 `unittest`。
 
-覆盖：兴趣提取与打分、B 站客户端（httpx.MockTransport）、读视频（brief / full 两档、缓存、超长截断）、自动读（brief 不调视觉、@ 与关键词触发 full、去重按模式分键）、弹幕/评论解析与鱼灾过滤、抽帧帧选择、LLM 判断降级、人设读取与提示词注入、自动兴趣写回与锁定、人设兴趣种子、插件完整轮次、去重、冷却、重发（含白名单约束）、赤石（含全局屏蔽词）、工具（白名单与参数校验）、类别级每轮上限、下载地址与 bvid 安全校验、配置模板与文档一致性，以及用宿主真实 `ManifestValidator` / `PluginLoader` 校验打包。
+覆盖：兴趣提取与打分、B 站客户端（httpx.MockTransport）、读视频（brief / full 两档、缓存、超长截断）、自动读（brief 不调视觉、@ 与关键词触发 full、去重按模式分键）、弹幕/评论解析与鱼灾过滤、抽帧帧选择、LLM 判断降级、人设读取与提示词注入、自动兴趣写回与锁定、人设兴趣种子、插件完整轮次、去重、冷却、赤石（含全局屏蔽词）、工具（白名单与参数校验）、类别级每轮上限、下载地址与 bvid 安全校验、配置模板与文档一致性，以及用宿主真实 `ManifestValidator` / `PluginLoader` 校验打包。
 
 真实联网自检：
 
@@ -667,6 +624,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v1.3.0**：清理与修复。删掉「分享格式」里实际不起作用的七个选项（`casual_mode` / `intro_enabled` / `intro_max_chars` / `send_as_parts` / `part_delay_seconds` / `narrative_enabled` / `narrative_max_chars`），分享固定为一条「随口一句 + 【标题】链接」；删掉整个「重发」模块（`[reshare]` 配置、钩子里的重发逻辑、历史记录模糊匹配）。修好「别人在群里贴 B 站链接麦麦不自动看」：自动读改挂 `chat.receive.after_process`（原来挂在 `before_process`，那时消息还没 `process()`，取不到正文），并支持 `data` 为字符串的文本段、JSON 结构化段与平台卡片；白名单判定也接受「消息里的 group_id / user_id 命中 `[[streams]]`」，新群第一条消息就能生效。
 - **v1.2.1**：修「麦麦调 `bili_read` 传 `detail="full"` 时不看画面」——深度读现在和自动读一样会抽帧交给视觉模型，返回内容里带 `【画面描述（抽帧）】`，同一个视频的画面描述会缓存 `cache_seconds` 秒避免重复抽帧；新增 `[read].full_in_private`（默认开），白名单里的私聊会话贴链接直接按 full 深度读。
 - **v1.2.0**：删掉扫码登录与全部聊天指令（平台会拦截），读视频改成 brief / full 两档——别人贴链接默认 brief、不调视觉模型；@ 麦麦或说「详细看看」时切 full，带字幕时间轴、弹幕时间线并抽帧识图。分享默认只发一条简短消息（`intro_enabled` / `send_as_parts` / `narrative_enabled` 默认关闭）；主动搜索与赤石改成 `bili_search` / `bili_shiwei` 工具，白名单与冷却照旧。
 - **v1.1.0**：`bili_read` 增加 `detail="full"` 深度读——字幕带 `[分:秒]` 时间轴、弹幕按分钟聚合成时间线、热评 15 条、分P 全列、简介 800 字，输出上限 9000 字；同时修掉弹幕时间戳解析错误（以前全挤在 00:00）。

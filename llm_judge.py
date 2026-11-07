@@ -193,17 +193,13 @@ def build_judge_prompt(
     comments: Sequence[str],
     subtitle: str = "",
     frames_desc: str = "",
-    narrative_max_chars: int = 160,
     persona_block: str = "",
-    intro_enabled: bool = False,
-    intro_max_chars: int = 40,
-    casual_mode: bool = False,
     casual_max_chars: int = 60,
 ) -> str:
     """拼出文本判断的 prompt。
 
-    ``casual_mode`` 打开时，让模型输出的是一句「刚好刷到、随口提一句」的话（仍放在
-    ``narrative`` 字段里），不要推荐口吻、不要宣布分享意图；关闭时输出一段自然语言介绍。
+    判断与文案一步完成：值得分享时，模型顺手写一句「刚好刷到、随口提一句」的话
+    （放在 ``narrative`` 字段里），分享时和【标题】链接合成一条消息发出去。
     """
 
     lines: List[str] = []
@@ -216,15 +212,11 @@ def build_judge_prompt(
         )
         lines.append("")
     lines.append("你是 B 站内容筛选助手。下面是一个候选视频的资料，以及某个聊天群里用户们的兴趣。")
-    if casual_mode:
-        lines.append("请判断这个视频值不值得发到这个群里（要求：内容新鲜有趣、贴合兴趣，不是主流官方宣传物料），")
-        lines.append(
-            "如果值得，请像平时在群里随口提一句那样，说说它哪里有意思——"
-            "不是「我要给大家推荐」，而是刚好刷到、顺嘴聊两句。"
-        )
-    else:
-        lines.append("请判断这个视频是否值得分享给这个群（要求：内容新鲜有趣、贴合兴趣，不是主流官方宣传物料），")
-        lines.append("如果值得，请用你自己的口吻自然地讲讲它讲了什么、哪里有意思。")
+    lines.append("请判断这个视频值不值得发到这个群里（要求：内容新鲜有趣、贴合兴趣，不是主流官方宣传物料），")
+    lines.append(
+        "如果值得，请像平时在群里随口提一句那样，说说它哪里有意思——"
+        "不是「我要给大家推荐」，而是刚好刷到、顺嘴聊两句。"
+    )
     lines.append("")
     lines.append("【视频资料】")
     tags = getattr(video, "tags", "") or ""
@@ -249,42 +241,23 @@ def build_judge_prompt(
         '"relevant": true 或 false',
         '"score": 0 到 10 的数字',
         '"category": "新鲜资讯" 或 "社区创作" 或 "玩家投稿" 或 "外网搬运" 或 "其他"',
-    ]
-    if casual_mode:
-        json_fields.append(
+        (
             f'"narrative": "像在群里随口提一句那样说这视频哪里有意思，一到两句话，'
             f"不超过 {casual_max_chars} 字；可以带点吐槽、情绪或疑问，像刚刷到顺手说一句；"
             "不要用「推荐」「分享」「安利」「值得一看」「大家快看」这类词，"
-            '不要说「给大家分享一个」「推荐给你们」，不要分点、不要编号、不要加前缀"'
-        )
-    else:
-        json_fields.append(
-            f'"narrative": "用你的口吻自然地说说这个视频讲了什么、有什么好看的，一到三句话，'
-            f"像在群里跟朋友随口安利；不要分点、不要编号、不要加「内容：」「看点：」这类前缀，"
-            f'不超过 {narrative_max_chars} 字"'
-        )
-    if intro_enabled and not casual_mode:
-        json_fields.insert(
-            0,
-            f'"intro": "一句不超过 {intro_max_chars} 字的推荐语，用你的口吻招呼群友来看，'
-            '可以说说为什么觉得有意思"',
-        )
-    json_fields.append('"reason": "一句话说明判断理由"')
+            "不要说「给大家分享一个」「推荐给你们」，不要分点、不要编号、不要加前缀"
+        ),
+        '"reason": "一句话说明判断理由"',
+    ]
     lines.append("{" + ", ".join(json_fields) + "}")
     lines.append(
         "如果视频主要是官方预告/PV/发布会/带货，或与兴趣明显无关，请把 relevant 设为 false。"
     )
     if persona_block:
-        if casual_mode:
-            lines.append(
-                "记住：narrative 要用上面人设的口吻来写，像平时在群里随口说话那样自然"
-                "（不要出现「作为AI」之类的自我说明）。"
-            )
-        else:
-            lines.append(
-                "记住：narrative 和 intro 都要用上面人设的口吻来写，像平时聊天那样自然"
-                "（不要出现「作为AI」之类的自我说明）。"
-            )
+        lines.append(
+            "记住：narrative 要用上面人设的口吻来写，像平时在群里随口说话那样自然"
+            "（不要出现「作为AI」之类的自我说明）。"
+        )
     return "\n".join(lines)
 
 
@@ -435,17 +408,13 @@ class LlmJudge:
         comments: Sequence[str] = (),
         subtitle: str = "",
         frames_desc: str = "",
-        narrative_max_chars: int = 160,
-        intro_enabled: bool = False,
-        intro_max_chars: int = 40,
-        casual_mode: bool = False,
         casual_max_chars: int = 60,
     ) -> Optional[Dict[str, Any]]:
         """判断视频是否值得分享，并生成分享文案。
 
         Returns:
-            ``{"relevant", "score", "category", "narrative", "intro", "reason"}``；
-            「随口一提」模式下 ``narrative`` 就是那句随口说的话，``intro`` 恒为空。
+            ``{"relevant", "score", "category", "narrative", "reason"}``；
+            ``narrative`` 就是那句随口说的话，分享时和标题链接合成一条消息。
             模型不可用或解析失败时返回 ``None``（调用方应回退到纯规则打分）。
         """
 
@@ -457,11 +426,7 @@ class LlmJudge:
             comments=comments,
             subtitle=subtitle,
             frames_desc=frames_desc,
-            narrative_max_chars=narrative_max_chars,
             persona_block=persona_block,
-            intro_enabled=intro_enabled,
-            intro_max_chars=intro_max_chars,
-            casual_mode=casual_mode,
             casual_max_chars=casual_max_chars,
         )
         text = await self._generate(prompt, task_name=self.task_name, max_tokens=900)
@@ -476,23 +441,17 @@ class LlmJudge:
             score = float(data.get("score") or 0.0)
         except (TypeError, ValueError):
             score = 0.0
-        narrative_limit = casual_max_chars if casual_mode else narrative_max_chars
+        narrative_limit = casual_max_chars
         narrative = _clip(str(data.get("narrative") or ""), narrative_limit)
         if not narrative:
             # 兼容旧格式回复：只有 summary/points 时，用 summary 兜底成一段叙述
             legacy_summary = str(data.get("summary") or "").strip()
             if legacy_summary:
                 narrative = _clip(legacy_summary, narrative_limit)
-        intro = (
-            _clip(str(data.get("intro") or ""), intro_max_chars)
-            if intro_enabled and not casual_mode
-            else ""
-        )
         return {
             "relevant": relevant,
             "score": score,
             "category": _clip(str(data.get("category") or ""), 20),
             "narrative": narrative,
-            "intro": intro,
             "reason": _clip(str(data.get("reason") or ""), 120),
         }

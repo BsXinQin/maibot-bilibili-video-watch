@@ -112,7 +112,6 @@ async def main() -> int:
     parser.add_argument("--danmaku", action="store_true", help="抓取弹幕与热门评论并打印样本")
     parser.add_argument("--vision", action="store_true", help="真实下载视频并抽帧（需 ffmpeg）")
     parser.add_argument("--llm", action="store_true", help="启用 LLM 判断（需要 MaiBot 宿主）")
-    parser.add_argument("--parts", action="store_true", help="按分条格式发送（推荐语/标题链接/自然语言介绍分开）")
     parser.add_argument("--shiwei", action="store_true", help="改为验证 /赤石视频（抽象整活类）")
     args = parser.parse_args()
 
@@ -130,7 +129,6 @@ async def main() -> int:
         config["vision"]["enabled"] = bool(args.vision)
         config["danmaku"]["danmaku_enabled"] = bool(args.danmaku)
         config["danmaku"]["comments_enabled"] = bool(args.danmaku)
-        config["share"]["send_as_parts"] = bool(args.parts)
         if args.loose:
             config["filter"]["min_play"] = 0
             config["filter"]["min_like"] = 0

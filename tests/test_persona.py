@@ -160,7 +160,7 @@ class JudgePromptTest(unittest.TestCase):
         self.llm_judge = load_submodule("llm_judge")
         self.video_module = load_submodule("bilibili")
 
-    def test_prompt_contains_persona_and_intro_field(self) -> None:
+    def test_prompt_contains_persona_and_narrative_field(self) -> None:
         block = self.persona.build_persona(HOST_VALUES).prompt_block()
         prompt = self.llm_judge.build_judge_prompt(
             make_video(self.video_module),
@@ -168,25 +168,23 @@ class JudgePromptTest(unittest.TestCase):
             danmaku=["好看"],
             comments=["顶"],
             persona_block=block,
-            intro_enabled=True,
         )
         self.assertIn("小鲸鱼", prompt)
-        self.assertIn("intro", prompt)
         self.assertIn("narrative", prompt)
+        self.assertNotIn('"intro"', prompt)
 
-    def test_prompt_without_persona_has_no_intro(self) -> None:
+    def test_prompt_without_persona_has_no_persona_block(self) -> None:
         prompt = self.llm_judge.build_judge_prompt(
             make_video(self.video_module),
             interests=["原神"],
             danmaku=[],
             comments=[],
-            intro_enabled=False,
         )
         self.assertNotIn("【你的人设】", prompt)
 
 
-class JudgeIntroParseTest(unittest.IsolatedAsyncioTestCase):
-    """judge() 要解析出 narrative 与 intro，并把人设段注入调用。"""
+class JudgeNarrativeParseTest(unittest.IsolatedAsyncioTestCase):
+    """judge() 要解析出 narrative，并把人设段注入调用。"""
 
     def setUp(self) -> None:
         load_plugin_module()
@@ -194,7 +192,7 @@ class JudgeIntroParseTest(unittest.IsolatedAsyncioTestCase):
         self.llm_judge = load_submodule("llm_judge")
         self.video_module = load_submodule("bilibili")
 
-    async def test_judge_returns_intro(self) -> None:
+    async def test_judge_exposes_persona_block(self) -> None:
         provider = self.persona.PersonaProvider(
             config_get=FakeConfig(HOST_VALUES).get, cache_seconds=600
         )
@@ -220,7 +218,6 @@ class JudgeIntroParseTest(unittest.IsolatedAsyncioTestCase):
                             "score": 8,
                             "category": "游戏",
                             "narrative": "介绍文案",
-                            "intro": "快来康康！",
                             "reason": "贴合兴趣",
                         },
                         ensure_ascii=False,
@@ -228,12 +225,9 @@ class JudgeIntroParseTest(unittest.IsolatedAsyncioTestCase):
                 }
 
         judge = self.llm_judge.LlmJudge(_Llm(), persona_provider=provider)
-        result = await judge.judge(
-            make_video(self.video_module), interests=["原神"], intro_enabled=True
-        )
+        result = await judge.judge(make_video(self.video_module), interests=["原神"])
         self.assertTrue(prompts)
         self.assertIn("小鲸鱼", prompts[0])
-        self.assertEqual(result["intro"], "快来康康！")
         self.assertEqual(result["narrative"], "介绍文案")
 
 

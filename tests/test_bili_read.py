@@ -442,7 +442,7 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
 
     def _make_plugin(self, **overrides):
         config = {
-            "plugin": {"enabled": True, "config_version": "1.2.1"},
+            "plugin": {"enabled": True, "config_version": "1.3.0"},
             "read": {
                 "enabled": True,
                 "auto_read_enabled": True,
@@ -729,6 +729,114 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(self.appender.calls), 1)
         self.assertIn("快速读", self.appender.calls[0]["segments"][0]["content"])
+
+
+    async def test_hook_registered_on_after_process(self) -> None:
+        hooks = [
+            item
+            for item in self.plugin.get_components()
+            if item.get("name") == "on_chat_receive"
+        ]
+        self.assertEqual(len(hooks), 1)
+        metadata = hooks[0].get("metadata") or {}
+        self.assertEqual(metadata.get("hook"), "chat.receive.after_process")
+        self.assertEqual(metadata.get("handler_name"), "on_chat_receive")
+
+    def _host_message(
+        self,
+        text: str,
+        *,
+        group_id: str = "",
+        user_id: str = "777",
+        stream_id: str = "",
+    ):
+        """模拟宿主 serialize_session_message 的产物：文本段的 data 是字符串。"""
+
+        return {
+            "message_id": "m1",
+            "session_id": stream_id,
+            "message_info": {
+                "user_info": {"user_id": user_id},
+                "group_info": {"group_id": group_id} if group_id else {},
+            },
+            "raw_message": [{"type": "text", "data": text}],
+        }
+
+    async def test_hook_reads_string_data_segment(self) -> None:
+        message = self._host_message(
+            "看看这个 https://www.bilibili.com/video/BV1TEST00001", stream_id="stream-1"
+        )
+        await self.plugin.on_chat_receive(message=message)
+        self.assertEqual(len(self.appender.calls), 1)
+        self.assertIn("原神新版本测评", self.appender.calls[0]["visible_text"])
+
+    async def test_hook_uses_kwargs_stream_id(self) -> None:
+        message = self._host_message("https://www.bilibili.com/video/BV1TEST00001")
+        await self.plugin.on_chat_receive(message=message, stream_id="stream-1")
+        self.assertEqual(len(self.appender.calls), 1)
+
+    async def test_hook_reads_new_group_by_group_id(self) -> None:
+        # 宿主还没登记这个会话：stream_id 与白名单对不上，但群号命中配置
+        plugin = self._make_plugin(
+            streams=[{"name": "新群", "enabled": True, "group_id": "784084137"}]
+        )
+        message = self._host_message(
+            "https://www.bilibili.com/video/BV1TEST00001",
+            group_id="784084137",
+            stream_id="unknown-stream",
+        )
+        await plugin.on_chat_receive(message=message)
+        self.assertEqual(len(self.appender.calls), 1)
+        self.assertIn("快速读", self.appender.calls[0]["segments"][0]["content"])
+
+    async def test_hook_ignores_disabled_stream_target(self) -> None:
+        plugin = self._make_plugin(
+            streams=[{"name": "停用群", "enabled": False, "group_id": "784084137"}]
+        )
+        message = self._host_message(
+            "https://www.bilibili.com/video/BV1TEST00001",
+            group_id="784084137",
+            stream_id="unknown-stream",
+        )
+        await plugin.on_chat_receive(message=message)
+        self.assertEqual(self.appender.calls, [])
+
+    async def test_hook_reads_link_from_platform_card(self) -> None:
+        message = {
+            "session_id": "stream-1",
+            "message_info": {
+                "user_info": {"user_id": "777"},
+                "additional_config": {
+                    "platform_card_payloads": [
+                        '{"desc":"【原神新版本测评】","url":"https://www.bilibili.com/video/BV1TEST00001"}'
+                    ]
+                },
+            },
+            "raw_message": [{"type": "light_app", "data": {"app": "com.tencent.miniapp"}}],
+        }
+        await self.plugin.on_chat_receive(message=message)
+        self.assertEqual(len(self.appender.calls), 1)
+
+    async def test_hook_private_by_user_id_defaults_to_full(self) -> None:
+        plugin = self._make_plugin(
+            streams=[{"name": "私聊", "enabled": True, "user_id": "123"}]
+        )
+        called = {}
+
+        async def fake_describe(brief):
+            called["bvid"] = brief.bvid
+            return "画面里有一只猫"
+
+        plugin._describe_video_frames = fake_describe
+        message = self._host_message(
+            "https://www.bilibili.com/video/BV1TEST00001",
+            user_id="123",
+            stream_id="unknown-private",
+        )
+        await plugin.on_chat_receive(message=message)
+        self.assertEqual(called.get("bvid"), "BV1TEST00001")
+        self.assertEqual(len(self.appender.calls), 1)
+        self.assertIn("【画面描述（抽帧）】", self.appender.calls[0]["segments"][0]["content"])
 
 
 class FullReadTriggerTests(unittest.TestCase):

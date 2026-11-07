@@ -5,6 +5,25 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.3.0] - 2026-11-08
+
+按实际使用反馈清理配置、去掉用不上的模块，并修好「别人贴链接麦麦不自动看」。
+
+### 移除
+
+- 删除「分享格式」里实际不起作用的选项：`[share].casual_mode`、`intro_enabled`、`intro_max_chars`、`send_as_parts`、`part_delay_seconds`、`narrative_enabled`、`narrative_max_chars`。分享固定为一条消息「随口一句 + 【标题】链接」，只保留 `casual_max_chars` 与 `include_stats_line`；LLM 提示词也只要求 `narrative` 一个字段，不再生成 `intro`。
+- 删除「重发」模块：`[reshare]` 整节（`enabled`、`trigger_keywords`、`history_keywords`、`match_window_days`、`min_match_score`、`reply_enabled`）、`_maybe_reshare` 钩子逻辑、`Store.find_by_query` 查询，以及「再发一遍」的确认话术。想再发一次直接重新贴链接即可。
+
+### 修复
+
+- 别人在群里贴 B 站链接时麦麦不自动看：自动读原来挂在 `chat.receive.before_process`，那时消息还没 `process()`，取不到正文；改挂 `chat.receive.after_process`（`timeout_ms=180000`、`error_policy=log`）。文本提取现在也认 `raw_message` 里 `data` 为字符串的文本段、JSON 结构化段与平台卡片（`platform_card_payloads`），链接藏在卡片里也能识别。
+- 新群第一条消息也认：白名单判定改为「会话 ID 命中」或「消息里的 group_id / user_id 命中已启用的 `[[streams]]`」，不再依赖宿主先把会话登记进 `get_all_streams()`。
+- 会话 ID 取不到时用钩子传入的 `stream_id` / `session_id` 兜底。
+
+### 变更
+
+- 读视频的缓存与去重键仍按 brief / full 区分，私聊默认 full 的行为不变。
+
 ## [1.2.1] - 2026-11-08
 
 修「麦麦认真看视频时只看文字、不看画面」：抽帧识图原来只挂在贴链接自动读那条链路上，麦麦自己调 `bili_read` 传 `detail="full"` 时并不经过它。

@@ -1,4 +1,4 @@
-"""插件主流程测试：定时/手动轮次、白名单解析、去重、LLM 判断、抽帧、重发与指令。"""
+"""插件主流程测试：定时/手动轮次、白名单解析、去重、LLM 判断、抽帧、分享格式与指令。"""
 
 from __future__ import annotations
 
@@ -39,18 +39,6 @@ JUDGE_OK = json.dumps(
     ensure_ascii=False,
 )
 
-JUDGE_WITH_INTRO = json.dumps(
-    {
-        "relevant": True,
-        "score": 8,
-        "category": "社区创作",
-        "narrative": "这期把新版本的内容聊得挺透，看着还挺有意思的。",
-        "intro": "呜哇，这个好好看！",
-        "reason": "贴合兴趣",
-    },
-    ensure_ascii=False,
-)
-
 JUDGE_IRRELEVANT = json.dumps(    {
         "relevant": False,
         "score": 2,
@@ -66,7 +54,7 @@ def base_config(**overrides):
     """返回一份“一定会分享”的测试配置（默认关闭 LLM/抽帧/弹幕，保证确定性）。"""
 
     config = {
-        "plugin": {"enabled": True, "config_version": "1.2.1"},
+        "plugin": {"enabled": True, "config_version": "1.3.0"},
         "schedule": {
             "interval_minutes": 30,
             "jitter_seconds": 0,
@@ -135,15 +123,8 @@ def base_config(**overrides):
             "require_interest_match": True,
         },
         "share": {
-            "casual_mode": False,
             "casual_max_chars": 60,
-            "send_as_parts": False,
-            "part_delay_seconds": 0.0,
-            "narrative_enabled": True,
-            "narrative_max_chars": 160,
             "include_stats_line": False,
-            "intro_enabled": False,
-            "intro_max_chars": 40,
         },
         "persona": {
             "enabled": True,
@@ -153,7 +134,6 @@ def base_config(**overrides):
             "style_hint": "",
             "cache_seconds": 0,
         },
-        "reshare": {"enabled": True},
         "shiwei": {
             "enabled": True,
             "cooldown_seconds": 600,
@@ -470,10 +450,7 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_llm_judge_generates_narrative(self) -> None:
         ctx = FakeCtx(self.tmp_dir, llm=FakeLlm(judge_response=JUDGE_OK))
         plugin = self.make_plugin(
-            base_config(
-                interest={"use_llm_judge": True},
-                share={"send_as_parts": True},
-            ),
+            base_config(interest={"use_llm_judge": True}),
             ctx=ctx,
         )
         summary = await plugin.run_round(reason="test")
@@ -483,7 +460,7 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(narrative in text for text in texts), texts)
         # 不再有「内容：」「看点：」这类正式格式
         self.assertFalse(any("内容：" in text or "看点：" in text for text in texts), texts)
-        # 介绍文案会被缓存，供之后重发复用
+        # 文案会被缓存，主动搜索命中同一条时复用
         record = plugin._store.get("BV1")
         self.assertEqual(record["narrative"], narrative)
 
@@ -573,50 +550,11 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
 
     # -- 人设语气 ------------------------------------------------------
 
-    async def test_intro_sent_as_first_part(self) -> None:
-        ctx = FakeCtx(
-            self.tmp_dir,
-            llm=FakeLlm(judge_response=JUDGE_WITH_INTRO),
-        )
-        plugin = self.make_plugin(
-            base_config(
-                share={"send_as_parts": True, "intro_enabled": True},
-                interest={"use_llm_judge": True},
-                persona={"enabled": True, "name": "小鲸鱼"},
-            ),
-            ctx=ctx,
-        )
-        summary = await plugin.run_round(reason="test")
-        self.assertTrue(summary["ok"], summary)
-        texts = [item["text"] for item in ctx.send.messages]
-        self.assertEqual(texts[0], "呜哇，这个好好看！")
-        self.assertIn("【原神新版本测评】", texts[1])
-
-    async def test_intro_disabled_skips_intro_part(self) -> None:
-        ctx = FakeCtx(self.tmp_dir, llm=FakeLlm(judge_response=JUDGE_WITH_INTRO))
-        plugin = self.make_plugin(
-            base_config(
-                share={"send_as_parts": True, "intro_enabled": False},
-                interest={"use_llm_judge": True},
-            ),
-            ctx=ctx,
-        )
-        await plugin.run_round(reason="test")
-        texts = [item["text"] for item in ctx.send.messages]
-        self.assertNotIn("呜哇，这个好好看！", texts)
-        self.assertIn("【原神新版本测评】", texts[0])
-
     # -- 随口一提模式 --------------------------------------------------
 
-    async def test_casual_mode_sends_single_message(self) -> None:
-        ctx = FakeCtx(self.tmp_dir, llm=FakeLlm(judge_response=JUDGE_WITH_INTRO))
-        plugin = self.make_plugin(
-            base_config(
-                share={"casual_mode": True, "intro_enabled": True},
-                interest={"use_llm_judge": True},
-            ),
-            ctx=ctx,
-        )
+    async def test_casual_message_is_single_line(self) -> None:
+        ctx = FakeCtx(self.tmp_dir, llm=FakeLlm(judge_response=JUDGE_OK))
+        plugin = self.make_plugin(base_config(interest={"use_llm_judge": True}), ctx=ctx)
         summary = await plugin.run_round(reason="test")
         self.assertTrue(summary["ok"], summary)
         self.assertEqual(len(ctx.send.messages), 1)
@@ -624,14 +562,12 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("这期把新版本的内容聊得挺透", text)
         self.assertIn("【原神新版本测评】", text)
         self.assertIn("https://www.bilibili.com/video/BV1", text)
-        # 随口一提模式不再单独发推荐语
-        self.assertNotIn("呜哇，这个好好看！", text)
 
-    async def test_casual_prompt_asks_for_offhand_tone(self) -> None:
-        ctx = FakeCtx(self.tmp_dir, llm=FakeLlm(judge_response=JUDGE_WITH_INTRO))
+    async def test_prompt_asks_for_offhand_tone(self) -> None:
+        ctx = FakeCtx(self.tmp_dir, llm=FakeLlm(judge_response=JUDGE_OK))
         plugin = self.make_plugin(
             base_config(
-                share={"casual_mode": True, "casual_max_chars": 50},
+                share={"casual_max_chars": 50},
                 interest={"use_llm_judge": True},
             ),
             ctx=ctx,
@@ -641,28 +577,13 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("随口", prompt)
         self.assertIn("不要用「推荐」「分享」「安利」", prompt)
         self.assertIn("50 字", prompt)
-        # 随口一提模式不再要求单独生成推荐语字段
         self.assertNotIn('"intro"', prompt)
 
-    async def test_standard_prompt_keeps_intro_field(self) -> None:
-        ctx = FakeCtx(self.tmp_dir, llm=FakeLlm(judge_response=JUDGE_WITH_INTRO))
-        plugin = self.make_plugin(
-            base_config(
-                share={"casual_mode": False, "intro_enabled": True},
-                interest={"use_llm_judge": True},
-            ),
-            ctx=ctx,
-        )
-        await plugin.run_round(reason="test")
-        prompt = ctx.llm.calls[-1]["prompt"]
-        self.assertIn('"intro"', prompt)
-        self.assertIn("像在群里跟朋友随口安利", prompt)
-
-    async def test_casual_mode_clips_fallback_description(self) -> None:
+    async def test_fallback_description_is_clipped(self) -> None:
         long_description = "这是一段很长的视频简介，" * 20
         ctx = FakeCtx(self.tmp_dir)
         plugin = self.make_plugin(
-            base_config(share={"casual_mode": True, "casual_max_chars": 30}),
+            base_config(share={"casual_max_chars": 30}),
             videos=[make_video(self.video_module, description=long_description)],
             ctx=ctx,
         )
@@ -673,7 +594,7 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertLess(len(text), len(long_description))
 
     async def test_persona_block_reaches_llm_prompt(self) -> None:
-        ctx = FakeCtx(self.tmp_dir, llm=FakeLlm(judge_response=JUDGE_WITH_INTRO))
+        ctx = FakeCtx(self.tmp_dir, llm=FakeLlm(judge_response=JUDGE_OK))
         plugin = self.make_plugin(
             base_config(
                 interest={"use_llm_judge": True},
@@ -694,7 +615,7 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_persona_read_from_host_config(self) -> None:
         ctx = FakeCtx(
             self.tmp_dir,
-            llm=FakeLlm(judge_response=JUDGE_WITH_INTRO),
+            llm=FakeLlm(judge_response=JUDGE_OK),
             config_values={
                 "bot.nickname": "小虎鲸",
                 "personality.personality": "爱刷 B 站",
@@ -718,32 +639,6 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         plugin = self.make_plugin(base_config(persona={"enabled": False}))
         await plugin._persona.refresh()
         self.assertTrue(plugin._persona.get().is_empty)
-
-    async def test_reshare_reuses_cached_intro(self) -> None:
-        video = make_video(self.video_module, bvid="BVR2", title="原神新版本测评")
-        plugin = self.make_plugin(
-            base_config(
-                share={"send_as_parts": True, "intro_enabled": True},
-                reshare={"enabled": True},
-            )
-        )
-        plugin._store.mark_shared(
-            video,
-            narrative="旧介绍",
-            intro="之前那句推荐语",
-            kind="auto",
-            stream_id="stream-1",
-        )
-        await plugin._maybe_reshare(
-            {
-                "stream_id": "stream-1",
-                "session_id": "stream-1",
-                "processed_plain_text": "你之前发的原神新版本测评再发一遍",
-            }
-        )
-        texts = [item["text"] for item in self.ctx.send.messages]
-        self.assertTrue(texts)
-        self.assertEqual(texts[0], "之前那句推荐语")
 
     async def test_active_search_command_and_cooldown(self) -> None:
         client = FakeClient(
@@ -803,75 +698,6 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         second = await plugin.share_shiwei("stream-1")
         self.assertEqual(second["reason"], "cooldown")
 
-    # -- 重发 Hook -----------------------------------------------------
-
-    async def test_reshare_hook_resends_cached_narrative(self) -> None:
-        video = make_video(self.video_module, bvid="BVR", title="原神新版本测评")
-        plugin = self.make_plugin(base_config())
-        plugin._store.mark_shared(
-            video, narrative="缓存介绍文案", kind="auto", stream_id="stream-1"
-        )
-        message = {
-            "processed_plain_text": "之前发的原神新版本测评再发一遍",
-            "session_id": "stream-1",
-        }
-        await plugin.on_chat_receive("chat.receive.before_process", message)
-        joined = "\n".join(item["text"] for item in self.ctx.send.messages)
-        self.assertIn("【原神新版本测评】", joined)
-        self.assertIn("缓存介绍文案", joined)
-
-    async def test_reshare_hook_ignores_unrelated_message(self) -> None:
-        plugin = self.make_plugin()
-        await plugin.on_chat_receive(
-            "chat.receive.before_process",
-            {"processed_plain_text": "今天天气不错", "session_id": "stream-1"},
-        )
-        self.assertEqual(self.ctx.send.messages, [])
-
-    async def test_reshare_hook_ignores_trigger_without_history(self) -> None:
-        plugin = self.make_plugin()
-        await plugin.on_chat_receive(
-            "chat.receive.before_process",
-            {"processed_plain_text": "再发一遍", "session_id": "stream-1"},
-        )
-        self.assertEqual(self.ctx.send.messages, [])
-
-    async def test_reshare_hook_ignores_non_whitelisted_stream(self) -> None:
-        """重发只对白名单会话生效，别的群让再发一遍也不发。"""
-
-        video = make_video(self.video_module, bvid="BVR3", title="原神新版本测评")
-        plugin = self.make_plugin(base_config())
-        plugin._store.mark_shared(
-            video, narrative="缓存介绍文案", kind="auto", stream_id="other-stream"
-        )
-        await plugin.on_chat_receive(
-            "chat.receive.before_process",
-            {
-                "processed_plain_text": "之前发的原神新版本测评再发一遍",
-                "session_id": "other-stream",
-            },
-        )
-        self.assertEqual(self.ctx.send.messages, [])
-
-    async def test_reshare_hook_ignores_when_whitelist_empty(self) -> None:
-        """没有配置白名单会话时，重发功能整体不生效。"""
-
-        video = make_video(self.video_module, bvid="BVR4", title="原神新版本测评")
-        config = base_config()
-        config["streams"] = []
-        plugin = self.make_plugin(config)
-        plugin._store.mark_shared(
-            video, narrative="缓存介绍文案", kind="auto", stream_id="stream-1"
-        )
-        await plugin.on_chat_receive(
-            "chat.receive.before_process",
-            {
-                "processed_plain_text": "之前发的原神新版本测评再发一遍",
-                "session_id": "stream-1",
-            },
-        )
-        self.assertEqual(self.ctx.send.messages, [])
-
     # -- 生命周期与配置 ------------------------------------------------
 
     async def test_lifecycle_starts_and_stops_loop(self) -> None:
@@ -908,13 +734,12 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(defaults["schedule"]["interval_minutes"], 60)
         self.assertEqual(defaults["schedule"]["search_cooldown_seconds"], 300)
         self.assertTrue(defaults["plugin"]["enabled"])
-        self.assertEqual(defaults["plugin"]["config_version"], "1.2.1")
+        self.assertEqual(defaults["plugin"]["config_version"], "1.3.0")
         self.assertEqual(defaults["interest"]["llm_task_name"], "planner")
         self.assertEqual(defaults["vision"]["task_name"], "vlm")
         self.assertTrue(defaults["categories"])
-        self.assertFalse(defaults["share"]["send_as_parts"])
-        self.assertFalse(defaults["share"]["intro_enabled"])
-        self.assertFalse(defaults["share"]["narrative_enabled"])
+        self.assertEqual(defaults["share"]["casual_max_chars"], 60)
+        self.assertFalse(defaults["share"]["include_stats_line"])
         self.assertTrue(defaults["read"]["full_vision_enabled"])
         self.assertTrue(defaults["read"]["full_in_private"])
         self.assertIn("详细看看", defaults["read"]["full_trigger_keywords"])
@@ -1441,7 +1266,7 @@ class PackagingTest(unittest.TestCase):
             raw = tomllib.load(handle)
         plugin = load_plugin_module().BilibiliInterestSharePlugin()
         plugin.set_plugin_config(raw)  # 不应抛异常
-        self.assertEqual(plugin.config.plugin.config_version, "1.2.1")
+        self.assertEqual(plugin.config.plugin.config_version, "1.3.0")
         self.assertEqual(plugin.config.streams, [])
         self.assertTrue(plugin.config.categories)
         self.assertEqual(plugin.config.vision.task_name, "vlm")
@@ -1682,44 +1507,6 @@ class ConfigFieldBehaviorTests(unittest.IsolatedAsyncioTestCase):
         summary2 = await plugin2.run_round(reason="test")
         self.assertEqual(summary2["shared"], 1)
 
-    async def test_reshare_reply_enabled_sends_confirmation(self) -> None:
-        """`[reshare].reply_enabled = true` 时重发后回一句确认。"""
-
-        video = make_video(self.video_module, bvid="BVRP", title="原神新版本测评")
-        plugin = self._make_plugin(
-            base_config(reshare={"enabled": True, "reply_enabled": True})
-        )
-        plugin._store.mark_shared(
-            video, narrative="缓存介绍文案", kind="auto", stream_id="stream-1"
-        )
-        await plugin._maybe_reshare(
-            {
-                "stream_id": "stream-1",
-                "session_id": "stream-1",
-                "processed_plain_text": "之前发的原神新版本测评再发一遍",
-            }
-        )
-        texts = [item["text"] for item in self.ctx.send.messages]
-        self.assertIn("好嘞，再发一遍～", texts)
-
-    async def test_reshare_reply_disabled_sends_no_confirmation(self) -> None:
-        video = make_video(self.video_module, bvid="BVRQ", title="原神新版本测评")
-        plugin = self._make_plugin(
-            base_config(reshare={"enabled": True, "reply_enabled": False})
-        )
-        plugin._store.mark_shared(
-            video, narrative="缓存介绍文案", kind="auto", stream_id="stream-1"
-        )
-        await plugin._maybe_reshare(
-            {
-                "stream_id": "stream-1",
-                "session_id": "stream-1",
-                "processed_plain_text": "之前发的原神新版本测评再发一遍",
-            }
-        )
-        texts = [item["text"] for item in self.ctx.send.messages]
-        self.assertNotIn("好嘞，再发一遍～", texts)
-        self.assertTrue(texts)
 
 
 class StreamFallbackTests(unittest.IsolatedAsyncioTestCase):
