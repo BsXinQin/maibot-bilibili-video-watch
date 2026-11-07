@@ -1,0 +1,351 @@
+# ======================================================================
+# 沁の刷B站视频 · 配置示例
+# ----------------------------------------------------------------------
+# 这是完整配置模板，所有可调项都列在这里，值等于插件内置默认值。
+# 想改哪一项就取消它上方的说明、直接改等号右边的值；
+# 只写想改的项也可以，没写的会自动用默认值。
+# ======================================================================
+
+[plugin]
+# 启用插件 —— 是否启用沁の刷B站视频
+enabled = true
+# 配置版本
+config_version = "1.0.0"
+
+[schedule]
+# 刷取间隔（分钟） —— 每隔多少分钟自动刷一次 B 站：1=每分钟，60=每小时，1440=每天（可调范围 1 分钟 ~ 24 小时）
+interval_minutes = 60
+# 随机抖动（秒） —— 每轮刷取前叠加的随机抖动秒数，避免每天固定时刻刷
+jitter_seconds = 120
+# 启动时先刷一轮 —— 插件加载后是否立刻先刷一轮
+run_on_start = true
+# 活跃时段 —— 允许自动分享的时间段，如 08:00-23:30；留空表示全天允许
+active_hours = ""
+# 每轮最多分享（个） —— 每个聊天流每轮最多分享几个视频
+max_share_per_round = 1
+# 主动搜索冷却（秒） —— 用户主动要求搜索分享的冷却秒数（默认 300=5 分钟）；与自动分享频率互不影响
+search_cooldown_seconds = 300
+
+[account]
+# B 站 Cookie
+cookie = ""
+# 扫码等待时长（秒） —— /扫码登录 发出二维码后等待手机确认的秒数，超时就作废
+qrcode_timeout_seconds = 180
+# 启动时检查登录状态 —— 插件启动时检查一次登录状态，Cookie 失效会在日志里提示
+check_on_start = true
+
+[sources]
+# 抓取热门列表 —— 是否抓取 B 站「热门」列表（热门榜以官方/大 UP 为主，默认关闭以避开主流官方内容）
+popular_enabled = false
+# 热门每页条数 —— 热门列表每页条数
+popular_page_size = 20
+# 热门抓取页数 —— 热门列表抓取页数
+popular_pages = 1
+# 按兴趣搜索视频 —— 是否按兴趣关键词 / 内容类别搜索 B 站视频（推荐开启，命中率最高）
+search_enabled = true
+# 每个关键词搜索页数 —— 每个关键词搜索的页数
+search_pages = 1
+# 每轮搜索关键词数 —— 每轮最多用几个兴趣关键词去搜索（按权重取前 N 个）
+search_keywords_per_round = 3
+# 搜索排序方式 —— 搜索结果排序：留空=综合排序；可选 pubdate(最新)、click(播放多)、dm(弹幕多)
+search_order = ""
+# 搜索间隔（秒） —— 关键词之间搜索的间隔秒数，避免请求过于密集
+search_delay_seconds = 1.2
+# 抓取排行榜 —— 是否抓取 B 站「排行榜」（该接口风控较严，未配置 Cookie 时经常失败）
+ranking_enabled = false
+# 排行榜分区
+ranking_rids = [0]
+
+[[categories]]
+# 类别名称
+name = "新鲜资讯"
+# 启用该类别 —— 是否启用这个类别
+enabled = true
+# 搜索关键词
+keywords = ["新游", "版本更新", "资讯", "首曝", "开箱"]
+# 该类别搜索排序
+search_order = "pubdate"
+# 该类别每轮最多分享
+max_share_per_round = 0
+# 该类别最低播放量 —— 该类别的最低播放量；0 表示沿用「过滤」里的最低播放量
+min_play = 0
+
+[[categories]]
+# 类别名称
+name = "社区创作"
+# 启用该类别 —— 是否启用这个类别
+enabled = true
+# 搜索关键词
+keywords = ["二创", "手书", "MAD", "同人", "混剪"]
+# 该类别搜索排序
+search_order = ""
+# 该类别每轮最多分享
+max_share_per_round = 0
+# 该类别最低播放量 —— 该类别的最低播放量；0 表示沿用「过滤」里的最低播放量
+min_play = 0
+
+[[categories]]
+# 类别名称
+name = "玩家投稿"
+# 启用该类别 —— 是否启用这个类别
+enabled = true
+# 搜索关键词
+keywords = ["整活", "实测", "挑战", "攻略", "搞笑"]
+# 该类别搜索排序
+search_order = ""
+# 该类别每轮最多分享
+max_share_per_round = 0
+# 该类别最低播放量 —— 该类别的最低播放量；0 表示沿用「过滤」里的最低播放量
+min_play = 0
+
+[[categories]]
+# 类别名称
+name = "外网搬运"
+# 启用该类别 —— 是否启用这个类别
+enabled = true
+# 搜索关键词
+keywords = ["搬运", "中字", "外网", "转载"]
+# 该类别搜索排序
+search_order = ""
+# 该类别每轮最多分享
+max_share_per_round = 0
+# 该类别最低播放量 —— 该类别的最低播放量；0 表示沿用「过滤」里的最低播放量
+min_play = 0
+
+[interest]
+# 从聊天记录提取兴趣 —— 是否从白名单聊天流的近期消息里自动提取兴趣关键词
+use_recent_chat = true
+# 回看最近多少小时
+lookback_hours = 48.0
+# 每个会话读取消息上限 —— 每个聊天流最多读取多少条近期消息用于提取兴趣
+max_messages_per_stream = 200
+# 自动兴趣词数量上限 —— 自动提取的兴趣关键词数量上限
+top_keywords = 12
+# 关键词最少出现次数 —— 关键词至少出现多少次才会被采用
+keyword_min_count = 2
+# 手写兴趣权重 —— 聊天流配置里手写兴趣词的权重
+explicit_weight = 3.0
+# 自动兴趣权重 —— 自动提取兴趣词的权重
+auto_weight = 1.0
+# 自动兴趣写回配置 —— 是否把自动提取的兴趣写回对应聊天流的「自动提取的兴趣」配置项，这样在设置页就能看到并修改；关掉则只在运行时使用，设置页不会更新
+persist_auto_interests = true
+# 用人设生成初始兴趣 —— 还没有任何兴趣（既没手写、聊天记录里也提不出）时，让 LLM 按 MaiBot 配置的人设自动生成一份初始兴趣，避免新群第一次刷 B 站时完全没有方向
+persona_seed_enabled = true
+# 初始兴趣数量 —— 用人设生成初始兴趣时生成几个词
+persona_seed_count = 8
+# 人设初始兴趣 —— 按人设生成的初始兴趣，通用配置，所有聊天流共用。某个聊天流既没手写兴趣、聊天记录里也提不出词时用它兜底；留空则插件会按人设让 LLM 生成一份并自动填到这里，你也可以直接改
+persona_seed_interests = []
+# 不参与提取的账号 —— 不参与兴趣提取的账号（填 user_id / QQ 号）。插件自己的账号、以及昵称里带人设名字的同类 bot 会自动跳过；其他第三方 bot 在协议层和真人消息无法区分，可以把它填到这里
+exclude_user_ids = []
+# 使用视频标签 —— 是否让视频 tags（搜索接口返回）参与兴趣打分
+use_tags = true
+# 标签命中权重 —— tags 命中时的字段权重
+tag_weight = 0.7
+# 读取字幕 —— 是否尝试读取视频 CC / AI 字幕辅助判断（匿名访问读不到字幕，需要登录 Cookie）
+use_subtitles = true
+# LLM 语义判断 —— 是否用 LLM 做语义判断（判断视频是否真的贴合兴趣，并生成推荐语与介绍）
+use_llm_judge = true
+# LLM 任务名 —— 文本类 LLM 调用使用的模型任务名（默认 planner，可在 model_config.toml 里改）
+llm_task_name = "planner"
+# 每轮 LLM 判断候选数 —— 每轮最多让 LLM 判断几个候选视频（控制成本；判断通过的第一个会被分享）
+llm_max_candidates = 5
+# LLM 温度
+llm_temperature = 0.3
+# 额外停用词 —— 额外的停用词，避免把口头禅当成兴趣
+extra_stopwords = []
+
+[vision]
+# 启用抽帧识图 —— 是否抽帧看画面（需要 ffmpeg；只对最终入选的视频做）
+enabled = true
+# 视觉模型任务名 —— 识图用的模型任务名（必须支持视觉；默认 vlm，planner 模型通常不支持图片）
+task_name = "vlm"
+# 抽取帧数 —— 抽取几帧
+frame_count = 4
+# 帧图片最大宽度
+max_width = 640
+# 下载体积上限（MB） —— 下载视频用于抽帧的最大体积（MB）
+max_download_mb = 80
+# 抽帧总超时（秒） —— 下载 + 抽帧的总超时
+timeout_seconds = 90.0
+
+[danmaku]
+# 读取弹幕
+danmaku_enabled = true
+# 弹幕抓取上限 —— 最多抓取多少条弹幕
+danmaku_fetch_limit = 400
+# 送 LLM 的弹幕条数 —— 过滤后最多送多少条弹幕给 LLM
+danmaku_limit = 40
+# 读取热门评论
+comments_enabled = true
+# 热门评论条数 —— 最多读取多少条热门评论
+comments_limit = 10
+# 过滤 AI 鱼灾弹幕 —— 过滤 AI 鱼灾式的模板弹幕/评论（重复、无意义、AI 生成痕迹等）
+filter_ai_spam = true
+
+[filter]
+# 最短时长（秒）
+min_duration_seconds = 60
+# 最长时长（秒）
+max_duration_seconds = 1800
+# 最低播放量
+min_play = 5000
+# 最低点赞数
+min_like = 100
+# 最大发布天数 —— 只分享最近多少天内发布的视频；0 表示不限制
+max_age_days = 30.0
+# 屏蔽关键词 —— 标题/简介/UP 名命中这些词直接排除
+block_keywords = ["广告", "带货", "抽奖", "互粉", "三连", "付费课程"]
+# 屏蔽 UP 主 —— 屏蔽的 UP 主名称
+block_up_names = []
+# 屏蔽分区 —— 屏蔽的分区名（tname）
+exclude_partitions = []
+# 排除官方内容 —— 是否排除主流官方内容（标题/简介命中「官方内容关键词」的视频）
+exclude_official = true
+# 官方内容关键词 —— 判定为「主流官方内容」的关键词（命中标题/简介即排除）
+official_keywords = ["官方", "预告", "PV", "正片", "发布会", "宣传片", "定档", "首曝", "概念片", "实机演示", "OP", "ED", "主题曲", "前瞻", "速览", "兑换码", "直播回放", "特别节目", "版本更新说明"]
+
+[scoring]
+# 兴趣权重 —— 兴趣命中的权重
+interest_weight = 1.0
+# 标题命中倍数 —— 标题命中的额外倍数
+title_match_boost = 2.0
+# 热度权重 —— 热度（播放/点赞/投币等）权重
+hot_weight = 1.0
+# 新鲜度权重
+freshness_weight = 0.6
+# 新鲜度衰减天数
+freshness_days = 7.0
+# 入选最低分
+min_score = 4.0
+# 必须命中兴趣词 —— 是否必须至少命中一个兴趣词（关闭后纯靠热度也可能入选）
+require_interest_match = true
+
+[persona]
+# 启用人设语气 —— 分享文案是否使用 MaiBot 配置的人设语气（通过 config.get 能力读取宿主配置）
+enabled = true
+# 覆盖人设名字
+name = ""
+# 覆盖人设描述
+personality = ""
+# 覆盖说话风格
+reply_style = ""
+# 额外风格要求 —— 额外的风格要求，会追加到人设后面，如「分享时不要太啰嗦，最多两句话」
+style_hint = ""
+# 人设缓存（秒） —— 人设缓存秒数；宿主改人设后最多这么久生效
+cache_seconds = 120
+
+[share]
+# 随口一提模式 —— 「随口一提」模式：把一句话和【标题】链接合成一条消息，语气像群里随口说话，不宣布「我要分享/推荐」这种意图；关闭则回到「推荐语 / 标题链接 / 介绍」分条格式
+casual_mode = true
+# 随口一句字数上限 —— 随口一句的最大字数（仅「随口一提」模式生效）
+casual_max_chars = 60
+# 发送推荐语 —— 是否先用一句人设口吻的推荐语开场（仅关闭「随口一提」模式时生效）
+intro_enabled = true
+# 推荐语字数上限 —— 推荐语的最大字数
+intro_max_chars = 40
+# 分条发送
+send_as_parts = true
+# 分条间隔（秒） —— 分条发送之间的间隔秒数
+part_delay_seconds = 0.8
+# 发送自然语言介绍 —— 是否发一段人设口吻的自然语言介绍（把「讲了什么」和「有什么好看」揉在一起，不用「内容：」「看点：」这类格式；仅关闭「随口一提」模式时生效）
+narrative_enabled = true
+# 介绍字数上限 —— 自然语言介绍的最大字数
+narrative_max_chars = 160
+# 附带视频信息 —— 是否在链接消息里附带 UP / 时长 / 播放量等信息
+include_stats_line = false
+
+[reshare]
+# 启用自然语言重发 —— 是否允许在聊天里用自然语言要求重发之前分享过的视频（如「你之前发的那个XX再发一遍」）
+enabled = true
+# 触发关键词 —— 触发重发的关键词
+trigger_keywords = ["再发一遍", "再发一次", "再分享", "重新发", "再来一遍", "再放一次", "再发下", "重发", "发一遍", "发一次"]
+# 指代关键词 —— 配合触发词使用，表示「指代之前分享过的视频」
+history_keywords = ["之前", "上次", "那个", "刚才", "你发过", "你分享过", "前面"]
+# 查找记录天数 —— 在多长时间内的分享记录里查找
+match_window_days = 60.0
+# 最低匹配相似度 —— 标题模糊匹配的最低相似度
+min_match_score = 0.25
+# 重发时附带说明 —— 重发时是否附带一句说明
+reply_enabled = true
+
+[shiwei]
+# 启用赤石视频 —— 是否启用 /赤石视频 指令
+enabled = true
+# 冷却（秒） —— 该指令的冷却秒数（默认 10 分钟）
+cooldown_seconds = 600
+# 一次最多分享
+max_share = 1
+# 搜索关键词
+keywords = ["抽象", "整活", "鬼畜", "离谱", "翻车", "整蛊", "土味", "迷惑行为", "逆天", "难绷", "典中典", "社死", "搞笑"]
+# 每次搜索关键词数 —— 每次用几个关键词搜索
+search_keywords_per_round = 2
+# 最低播放量
+min_play = 20000
+# 最短时长（秒）
+min_duration_seconds = 10
+# 最长时长（秒）
+max_duration_seconds = 900
+# 额外排除关键词 —— 石味视频额外排除的关键词
+block_keywords = ["官方", "预告", "发布会", "宣传片"]
+
+[read]
+# 启用读视频 —— 启用 bili_read 工具（麦麦能真正读到视频的简介、分P、字幕、热评、弹幕）
+enabled = true
+# 贴链接自动读 —— 白名单会话里有人贴 B 站链接时自动读一遍并塞进上下文
+auto_read_enabled = true
+# 单条消息最多读几个 —— 一条消息里最多自动读几个链接（1~3）
+auto_read_max_links = 1
+# 热评条数 —— 读几条热门评论（0 表示不读，最多 20）
+comment_limit = 8
+# 弹幕采样条数 —— 采样多少条弹幕（0 表示不读，最多 100）
+danmaku_limit = 30
+# 读取字幕 —— 是否读取 CC 字幕（需要登录 Cookie 才有）
+use_subtitle = true
+# 内容长度上限 —— 交给模型的内容字符上限，太长按顺序截断
+max_chars = 3500
+# 缓存时间（秒） —— 同一个视频多少秒内复用缓存结果
+cache_seconds = 900
+
+[advanced]
+# 数据目录
+data_dir = ""
+# 接口请求超时（秒） —— B 站接口请求超时
+request_timeout_seconds = 12.0
+# 浏览器标识（User-Agent） —— 请求 B 站时使用的 User-Agent
+user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+# （旧版）Cookie —— 旧版字段，已迁移到「账号登录」里的 Cookie；这里留空即可
+cookie = ""
+# ffmpeg 路径 —— ffmpeg 可执行文件路径；留空则自动从 imageio-ffmpeg 或 PATH 查找
+ffmpeg_path = ""
+# 去重天数 —— 同一个视频多少天内不重复分享
+dedupe_days = 30
+# 去重记录上限
+max_seen_records = 3000
+# 调试日志
+debug = false
+
+# ----------------------------------------------------------------------
+# 白名单会话：想分享到哪个群 / 私聊，就在这里加一段 [[streams]]
+# 取消下面这段的注释并改成你自己的群号即可；可以写多段。
+# ----------------------------------------------------------------------
+# [[streams]]
+# 备注名
+# name = "示例群"
+# 启用该会话 —— 是否启用这个聊天流
+# enabled = false
+# 会话 ID —— 聊天流 ID（MaiBot 的 session_id）；填写后优先级最高
+# stream_id = ""
+# 群号
+# group_id = "123456789"
+# 私聊用户 ID
+# user_id = ""
+# 手写兴趣
+# interests = ["原神", "编程"]
+# 自动提取的兴趣
+# auto_interests = []
+# 启用的内容类别
+# categories = []
+# 自动提取兴趣
+# auto_interest = true
+# 该流每轮最多分享
+# max_share_per_round = 0

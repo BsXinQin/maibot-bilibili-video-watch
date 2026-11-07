@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maibot-plugin-sdk httpx segno tomlkit imageio-ffmpeg
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -t tests -v
+
+      - name: Build release package
+        run: python build.py
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-${{ matrix.python-version }}
+          path: dist/*.zip
+          if-no-files-found: error

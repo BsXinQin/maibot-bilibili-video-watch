@@ -1,0 +1,661 @@
+# 沁の刷B站视频（MaiBot 插件）
+
+[![version](https://img.shields.io/badge/version-1.0.0-ff69b4)](CHANGELOG.md)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
+[![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
+
+定时「刷」B 站，按白名单聊天流里大家的兴趣挑**真的有趣**的视频分享出来。
+
+插件会读视频的标签、字幕、弹幕和热门评论，必要时**下载视频抽几帧看画面**，再让 LLM 判断「这视频到底讲了什么、值不值得分享」，最后用**符合人设口吻的自然语言**说出来，像群友随口安利那样。
+
+> 当前版本 **v1.0.0** · 全部配置项已中文化 · 支持手机扫码登录 B 站 · 能读视频
+> 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
+
+## 目录
+
+- [功能一览](#功能一览)
+- [分享效果](#分享效果)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+  - [`[plugin]` 插件开关](#plugin-插件开关)
+  - [`[schedule]` 刷取频率](#schedule-刷取频率)
+  - [`[account]` 账号登录](#account-账号登录)
+  - [`[sources]` 视频来源](#sources-视频来源)
+  - [`[[categories]]` 内容类别](#categories-内容类别)
+  - [`[interest]` 兴趣与语义判断](#interest-兴趣与语义判断)
+  - [`[vision]` 抽帧识图](#vision-抽帧识图)
+  - [`[danmaku]` 弹幕与热门评论](#danmaku-弹幕与热门评论)
+  - [`[filter]` 硬过滤](#filter-硬过滤)
+  - [`[scoring]` 打分](#scoring-打分)
+  - [`[persona]` 人设语气](#persona-人设语气)
+  - [`[share]` 分享格式](#share-分享格式)
+  - [`[reshare]` 自然语言重发](#reshare-自然语言重发)
+  - [`[shiwei]` 赤石视频](#shiwei-赤石视频)
+  - [`[read]` 读视频](#read-读视频)
+  - [`[advanced]` 运行参数](#advanced-运行参数)
+  - [`[[streams]]` 白名单聊天流](#streams-白名单聊天流)
+- [指令](#指令)
+- [工作原理](#工作原理)
+- [数据文件](#数据文件)
+- [目录结构](#目录结构)
+- [测试与自检](#测试与自检)
+- [常见问题](#常见问题)
+- [已知限制](#已知限制)
+- [版本](#版本)
+
+---
+
+## 功能一览
+
+| 能力 | 说明 |
+| --- | --- |
+| **可调频率** | `[schedule].interval_minutes` 支持 1 分钟 ~ 24 小时，另有随机抖动与活跃时段 |
+| **白名单** | 只有 `[[streams]]` 里列出的聊天流会收到分享，每个流可单独配兴趣、类别、数量 |
+| **兴趣来源** | ① 配置里手写兴趣 ② 自动从该流近期聊天提取高频词 ③ 没有兴趣时用通用的「人设初始兴趣」兜底 ④ 视频标签/标题/简介/分区/UP 名 |
+| **兴趣可见可改** | 自动提取的兴趣会**写回配置**的 `auto_interests`，在设置页能看到、也能直接改；手动改过就锁定，插件不再覆盖 |
+| **扫码登录** | `/扫码登录` 发一张二维码（**仅私聊可用**），手机 B 站扫码后自动保存 Cookie；登录后能读字幕、排行榜更稳 |
+| **多来源抓取** | 关键词搜索（WBI 签名，免登录可用）、热门列表、排行榜，全部可开关 |
+| **内容类别** | 新鲜资讯 / 社区创作 / 玩家投稿 / 外网搬运，类别与关键词都可增删改 |
+| **深度理解** | 字幕 + 弹幕 + 热门评论 + **抽帧识图** + LLM 语义判断与自然语言介绍 |
+| **噪声过滤** | 硬过滤（时长/播放/点赞/屏蔽词/官方内容）+ AI 鱼灾式模板弹幕评论过滤 |
+| **去重** | 分享过的视频记入名单，默认 30 天内不再自动分享 |
+| **主动搜索** | `/bili-search 关键词`，独立冷却（默认 5 分钟），不影响自动频率 |
+| **自然语言重发** | 聊天里说「你之前发的那个 XX 再发一遍」，从历史记录里找回并复用当时的文案 |
+| **赤石视频** | `/赤石视频` 抓一个抽象整活视频，只发标题+链接，不带介绍 |
+| **能读视频** | 反过来也能读：`bili_read` 工具 + 白名单会话里**贴链接自动读**，把简介、分P、CC 字幕、热评、弹幕交给麦麦，不用再对着标题瞎猜 |
+| **人设语气** | 推荐语与介绍按 MaiBot 的**麦麦人设**口吻生成，可覆盖、可关 |
+| **全中文配置** | 每个配置项都有中文名和中文说明，WebUI 表单直接看得懂 |
+
+---
+
+## 分享效果
+
+默认的「随口一提」模式下，群里看到的就是一条消息——一句人设口吻的随口评价 + 标题 + 链接：
+
+```
+呜哇这个我也刷到了，几套新配队思路比我自己瞎搭的强多了
+【【原神】5.2 深渊满星配队实测】 https://www.bilibili.com/video/BV1xxxxxxxxx
+```
+
+关掉 `[share].casual_mode` 后改成分条发送，能带上更完整的介绍：
+
+```
+来了来了，这个我之前刷到过
+
+【【原神】5.2 深渊满星配队实测】
+https://www.bilibili.com/video/BV1xxxxxxxxx
+
+这期把新版本的角色和玩法都聊透了，几套配队思路挺有参考价值，
+看到一半我就想去试试了
+```
+
+文案全部由 LLM 按 MaiBot 的人设口吻生成，**不是模板套话**；没有可用 LLM 时退回视频简介原文，不会发不出去。
+
+---
+
+## 快速开始
+
+### 1. 安装
+
+把整个目录放到 MaiBot 的 `plugins/` 下，目录名必须和插件 ID 一致：
+
+```
+<MaiBot 实例>/plugins/github.BsXinQin.bilibili_video_watch/
+```
+
+从插件市场安装会自动放到这个位置。装好后重启 MaiBot，或在 WebUI 插件页启用 `github.BsXinQin.bilibili_video_watch`。
+
+> **从旧版换过来**：旧版的插件 id 是 `github.TommyAAKK.bilibili_interest_share`，这个版本改成了 `github.BsXinQin.bilibili_video_watch`，宿主会当成一个新插件。想保留原来的配置与已刷名单，先把 `data/plugins/github.TommyAAKK.bilibili_interest_share/` 整个目录改名成 `data/plugins/github.BsXinQin.bilibili_video_watch/`，再卸载旧插件、安装这个版本。
+
+### 2. 登录 B 站（推荐，可选）
+
+登录不是必须的，但登录后能读**字幕**、排行榜和搜索都更稳。**在私聊里**（群里不行）发：
+
+```
+/扫码登录
+```
+
+插件会发一张二维码图片，用手机 B 站客户端扫码并在手机上确认，Cookie 会自动写进配置的 `[account].cookie`，立刻生效。也可以在 WebUI 里手动填 Cookie。
+
+> 扫码登录**只支持私聊**（群里发二维码容易被别人扫走），二维码 180 秒内有效（`[account].qrcode_timeout_seconds`）。
+
+### 3. 配置白名单
+
+首次启动后 MaiBot 会在插件目录生成 `config.toml`，**至少填一个 `[[streams]]`**，否则不会分享给任何会话：
+
+```toml
+[[streams]]
+name = "原神群"                      # 备注名，随便写
+enabled = true
+group_id = "123456789"               # 群号；也可以直接填 stream_id
+interests = ["原神", "抽卡", "机械键盘"]  # 手写兴趣（可留空）
+auto_interest = true                 # 允许从群聊记录里自动提取兴趣
+auto_interests = []                  # 自动提取的兴趣，插件会自己写，也可以手动改
+```
+
+找不到群号？在群里发一句 `/bili-status`，日志会打印解析到的会话信息；也可以直接把 `stream_id` 填上（优先级最高）。
+
+### 4. 确认在跑
+
+- `/bili-status`：看登录状态、频率、白名单、各会话兴趣、下一轮时间
+- `/bili-test`：预览本轮候选与打分，只发预览、不分享视频
+- `/bili-share`：立刻跑一轮
+
+> 仓库里的 `config.example.toml` 是**带完整中文注释的配置模板**，每个键上方都有一行说明，值等于内置默认值，可以整份复制成 `config.toml` 再改。
+
+### 运行环境
+
+- **运行时不依赖额外 pip 包**：HTTP 用宿主自带的 `httpx`，二维码用宿主环境里的 `qrcode`/`Pillow`。
+- **抽帧识图需要 ffmpeg**（可选）：优先 `[advanced].ffmpeg_path`，其次 `imageio-ffmpeg`，最后查系统 `PATH`；都没有就自动跳过抽帧，其余流程正常。
+- `_manifest.json` 把 `imageio-ffmpeg` 声明成 `python_package` 依赖（`>=0.4.9`），缺了宿主会自动装（等于自带一份 ffmpeg）。完全离线部署时也可以手动 `pip install imageio-ffmpeg` 或直接在 `PATH` 放一个 `ffmpeg`，宿主检测到已满足就不会联网。
+
+---
+
+## 配置说明
+
+配置按 section 分组，WebUI 会自动渲染成中文表单；`config.example.toml` 里每个键上方也有同一套中文说明。
+
+> 改完 `config.toml` 保存即可，MaiBot 会自动重载配置，不用重启。
+
+### `[plugin]` 插件开关
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
+| `config_version` | `"1.0.0"` | 配置版本号，由插件维护，一般不要手动改 |
+
+### `[schedule]` 刷取频率
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `interval_minutes` | `60` | 每隔多少分钟刷一次，**1 ~ 1440**（1 分钟 ~ 24 小时） |
+| `jitter_seconds` | `120` | 每轮叠加的随机抖动，避免每天固定时刻 |
+| `run_on_start` | `true` | 插件加载后先刷一轮 |
+| `active_hours` | `""` | 允许自动分享的时段，如 `08:00-23:30`，支持跨午夜；留空 = 全天 |
+| `max_share_per_round` | `1` | 每个流每轮最多分享几个 |
+| `search_cooldown_seconds` | `300` | **主动搜索**的独立冷却，与自动频率无关 |
+
+### `[account]` 账号登录
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `cookie` | `""` | B 站 Cookie。发 `/扫码登录` 会自动填进来，也可以手动粘贴（形如 `SESSDATA=...; bili_jct=...`） |
+| `qrcode_timeout_seconds` | `180` | `/扫码登录` 发出二维码后等待手机确认的秒数，超时作废 |
+| `check_on_start` | `true` | 启动时检查一次登录状态，Cookie 失效会在日志里提示 |
+
+登录后能做什么：
+
+- 读**字幕**（未登录时 B 站不返回字幕内容，只能靠标题/简介/弹幕/画面）
+- 排行榜、搜索接口更稳，被风控（`-352`）的概率更低
+
+> Cookie 会以明文存在插件目录的 `config.toml` 里，**不要提交到公开仓库**（仓库的 `.gitignore` 已忽略 `config.toml`）。旧版本把 Cookie 放在 `[advanced].cookie`，仍然兼容，但建议迁移到 `[account].cookie`。
+
+### `[sources]` 视频来源
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `search_enabled` | `true` | 按关键词搜索（推荐，命中率最高） |
+| `search_pages` | `1` | 每个关键词搜几页 |
+| `search_keywords_per_round` | `3` | 每轮最多用几个兴趣词搜索 |
+| `search_order` | `""` | `""` 综合 / `pubdate` 最新 / `click` 播放 / `dm` 弹幕 |
+| `search_delay_seconds` | `1.2` | 关键词之间的间隔，避免请求过密 |
+| `popular_enabled` | `false` | 热门列表（以官方/大 UP 为主，默认关掉以避开主流官方内容） |
+| `popular_page_size` | `20` | 抓热门时每页多少条 |
+| `popular_pages` | `1` | 抓热门时抓几页 |
+| `ranking_enabled` | `false` | 排行榜（风控严，未配 Cookie 常失败） |
+| `ranking_rids` | `[0]` | 排行榜分区号，`[0]` = 全站 |
+
+### `[[categories]]` 内容类别
+
+用于按类别主动搜索，默认四类，可增删改。类别名会被 `[[streams]].categories` 引用。
+
+```toml
+[[categories]]
+name = "新鲜资讯"                 # 类别名
+enabled = true                   # 是否启用
+keywords = ["新游", "版本更新", "资讯", "首曝", "开箱"]  # 该类别的搜索关键词
+search_order = "pubdate"         # 该类别排序：留空用 [sources].search_order
+max_share_per_round = 0          # 该类别每轮最多几个，0 = 不单独限制
+min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter].min_play
+```
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `name` | — | 类别名，`[[streams]].categories` 引用这个名字 |
+| `enabled` | `true` | 是否启用这个类别 |
+| `keywords` | — | 这个类别用来搜索的关键词 |
+| `search_order` | `""` | 该类别搜索排序；留空用 `[sources].search_order` |
+| `max_share_per_round` | `0` | 该类别每轮最多几个，`0` = 不单独限制（与 `[schedule]`、`[[streams]]` 的同名项取最严的） |
+| `min_play` | `0` | 该类别最低播放量，`0` = 沿用 `[filter].min_play` |
+
+### `[interest]` 兴趣与语义判断
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `use_recent_chat` | `true` | 从近期聊天自动提取兴趣 |
+| `lookback_hours` | `48` | 回看最近多少小时的聊天 |
+| `max_messages_per_stream` | `200` | 每个流最多读多少条消息 |
+| `top_keywords` | `12` | 自动提取最多取前几个词 |
+| `keyword_min_count` | `2` | 一个词至少出现几次才算兴趣 |
+| `explicit_weight` | `3.0` | 手写兴趣的权重 |
+| `auto_weight` | `1.0` | 自动提取兴趣的权重 |
+| `persist_auto_interests` | `true` | 把自动提取的兴趣**写回配置**的 `[[streams]].auto_interests` |
+| `persona_seed_enabled` | `true` | 一点兴趣都没有时，按人设让 LLM 生成一份初始兴趣 |
+| `persona_seed_count` | `8` | 初始兴趣生成几个（3 ~ 20） |
+| `persona_seed_interests` | `[]` | **人设初始兴趣（通用配置，所有流共用）**；留空时插件会按人设**自动生成一次**并填进来，也可以直接改 |
+| `exclude_user_ids` | `[]` | 不参与兴趣提取的账号（填 QQ 号），用来挡其他 bot |
+| `use_tags` | `true` | 视频标签参与打分 |
+| `tag_weight` | `0.7` | 标签命中的权重 |
+| `use_subtitles` | `true` | 读字幕（**需要登录**，未登录时 B 站不返回字幕内容） |
+| `use_llm_judge` | `true` | LLM 语义判断 + 生成自然语言介绍 |
+| `llm_task_name` | `planner` | 文本 LLM 用的模型任务名 |
+| `llm_max_candidates` | `5` | 每轮最多让 LLM 判断几个候选（控成本） |
+| `llm_temperature` | `0.3` | LLM 温度，越低越稳定保守 |
+| `extra_stopwords` | `[]` | 额外停用词，提兴趣时忽略，如 `["哈哈", "什么"]` |
+
+**关于自动兴趣（重点）**
+
+1. 每轮会从该流最近 `lookback_hours` 小时的聊天里提取高频词；
+2. 提取结果会写进 `config.toml` 里对应 `[[streams]]` 的 `auto_interests`，**设置页刷新就能看到**；
+3. 想改就改——手动改过之后，插件认为你接管了，**不再自动覆盖**（相当于锁定）；
+4. 想恢复自动维护：把 `auto_interests` 清空即可，下一轮会重新写；
+5. `[interest].persona_seed_interests`（**通用配置，所有流共用**）留空时，插件会按 MaiBot 人设让 LLM **自动生成一次**并填进来——不用等某个流没兴趣才触发；某个流**既没有手写兴趣、聊天里也提不出词**时，也用它兜底。生成后可以直接改。
+6. 提取时会自动丢掉「没有兴趣含义」的高频词（`用户`、`主人`、`消息`、`https`、`ww` 这类），以及**群里喊 bot 的名字和别名**（比如人设叫「小鲸鱼」，那 `小鲸鱼` / `鲸鱼` 不会被当成群的兴趣）；嫌不够可以用 `extra_stopwords` 自己补。宿主环境装了 [jieba](https://github.com/fxsjy/jieba) 时会用它分词（只保留名词类词，词更像真实兴趣）；没装就退回字符窗口统计，功能一样但词汇会碎一些。
+7. **bot 消息不参与提取**：插件自己的账号会自动跳过；其他 bot 没法可靠地自动认出来（按昵称猜会误伤真人，所以不做），要挡哪个就把它的 QQ 号填进 `exclude_user_ids`。
+
+> 写配置用的是 `tomlkit`，会保留你手写的注释和格式；写完只影响文件，插件会同步内存里的配置，不需要重启。写回动作会**攒到这一轮跑完再落盘**——因为宿主的 `config.toml` 一变就会重载插件，中途写盘会把正在跑的这轮打断。
+
+### `[vision]` 抽帧识图
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否抽帧看画面（只对最终入选的视频做） |
+| `task_name` | `vlm` | 识图模型任务名，**必须支持视觉**（`planner` 通常不支持图片） |
+| `frame_count` | `4` | 抽几帧 |
+| `max_width` | `640` | 帧宽（越小越省 token） |
+| `max_download_mb` | `80` | 下载体积上限 |
+| `timeout_seconds` | `90` | 下载 + 抽帧总超时 |
+
+### `[danmaku]` 弹幕与热门评论
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `danmaku_enabled` | `true` | 是否抓弹幕 |
+| `danmaku_fetch_limit` | `400` | 最多抓多少条原始弹幕 |
+| `danmaku_limit` | `40` | 过滤后最多送多少条弹幕给 LLM |
+| `comments_enabled` | `true` | 是否抓热门评论 |
+| `comments_limit` | `10` | 最多送多少条热门评论给 LLM |
+| `filter_ai_spam` | `true` | 过滤 AI 鱼灾式内容（模板化「感谢分享，学到了」、AI 生成声明、纯符号刷屏等） |
+
+### `[filter]` 硬过滤
+
+不符合的视频直接丢掉，不进打分。
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `min_duration_seconds` | `60` | 视频最短时长（秒） |
+| `max_duration_seconds` | `1800` | 视频最长时长（秒） |
+| `min_play` | `5000` | 最低播放量 |
+| `min_like` | `100` | 最低点赞数 |
+| `max_age_days` | `30` | 只分享最近多少天内发布的，`0` = 不限 |
+| `block_keywords` | 见配置 | 标题/简介命中即跳过（广告、带货、抽奖、互粉、三连、付费课程） |
+| `block_up_names` | `[]` | 这些 UP 主的视频不分享 |
+| `exclude_partitions` | `[]` | 这些分区的视频不分享，如 `["资讯", "影视"]` |
+| `exclude_official` | `true` | 排除主流官方内容 |
+| `official_keywords` | 见配置 | 命中标题/简介即排除：官方、预告、PV、正片、发布会、前瞻、速览、兑换码…… |
+
+### `[scoring]` 打分
+
+```
+总分 = 兴趣分 × interest_weight + 热度分 × hot_weight + 新鲜度分 × freshness_weight
+```
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `interest_weight` | `1.0` | 兴趣命中分的权重 |
+| `title_match_boost` | `2.0` | 标题命中兴趣词时的额外加成倍数 |
+| `hot_weight` | `1.0` | 播放/点赞热度的权重 |
+| `freshness_weight` | `0.6` | 新鲜度的权重 |
+| `freshness_days` | `7` | 新鲜度按多少天内线性衰减 |
+| `min_score` | `4.0` | 入选最低分（纯规则分；开启 LLM 判断后还要通过 LLM） |
+| `require_interest_match` | `true` | 必须命中至少一个兴趣词（关掉更容易分享但容易跑题） |
+
+兴趣命中按字段给不同权重：标题 `title_match_boost`（默认 2.0）、简介 0.8、分区 0.6、UP 名 0.4、标签 `tag_weight`。
+
+### `[persona]` 人设语气
+
+分享文案（推荐语 / 自然语言介绍）按 MaiBot 主程序里配置的**麦麦人设**来写，而不是固定模板语气。
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否启用人设语气 |
+| `name` | `""` | 手动覆盖人设名字；留空用宿主的 |
+| `personality` | `""` | 手动覆盖人设描述；留空用宿主的 |
+| `reply_style` | `""` | 手动覆盖说话风格；留空用宿主的 |
+| `style_hint` | `""` | 追加给 LLM 的额外要求，如「多提一句视频看点」 |
+| `cache_seconds` | `120` | 人设缓存时间（秒），过期后下次分享前自动重读 |
+
+人设通过宿主提供的 `config.get` 能力读取，字段为 `bot.nickname`、`bot.alias_names`、`personality.personality`、`personality.reply_style`、`personality.behavior_style`（即实例 `config/bot_config.toml` 里 `[bot]` 与 `[personality]` 两节）。读不到时退回中性语气，不影响分享。
+
+> 人设只影响「怎么说」，不影响「分享什么」：筛选与打分仍由 `[interest]` / `[scoring]` 决定。
+
+### `[share]` 分享格式
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `casual_mode` | `true` | **「随口一提」模式**：一句话 + 【标题】链接合成**一条**消息，像群里顺嘴提一句 |
+| `casual_max_chars` | `60` | 随口一句的字数上限（仅 `casual_mode = true` 时生效） |
+| `intro_enabled` | `true` | 是否先发一句**人设口吻的推荐语**（关闭「随口一提」时生效） |
+| `intro_max_chars` | `40` | 推荐语字数上限 |
+| `send_as_parts` | `true` | 分条发送（关闭「随口一提」时生效） |
+| `part_delay_seconds` | `0.8` | 分条之间的间隔 |
+| `narrative_enabled` | `true` | 是否发一段人设口吻的**自然语言介绍**（关闭「随口一提」时生效） |
+| `narrative_max_chars` | `160` | 介绍文案字数上限 |
+| `include_stats_line` | `false` | 消息里是否附 UP / 时长 / 播放 |
+
+**默认「随口一提」**（`casual_mode = true`）只发一条消息，语气是「刚好刷到、顺嘴说一句」：
+
+```
+这期把新版本的角色和玩法都聊透了，看到一半我就想去试试了 【标题】 https://www.bilibili.com/video/BVxxxx
+```
+
+模型会被告知不要用「推荐」「分享」「安利」「值得一看」「大家快看」这类词，可以带吐槽、情绪或疑问——读起来更像群友闲聊，而不是机器人在按流程发内容。
+
+**关掉「随口一提」**（`casual_mode = false`）回到分条格式：
+
+```
+第 1 条：呜哇，这个必须拉你们一起看！            ← 推荐语（LLM 按人设生成）
+第 2 条：【标题】 https://www.bilibili.com/video/BVxxxx
+第 3 条：这期把新版本的角色和玩法都聊透了，几个新配队思路挺有参考价值，
+        看到一半我就想去试试了 (｡･ω･｡)          ← 自然语言介绍（LLM 按人设生成）
+```
+
+介绍不是固定模板：模型会讲清「讲了什么 + 哪里有意思」，不分点、不加编号、不带「内容：」「看点：」这类前缀。没有 LLM 可用时退回视频简介原文。
+
+### `[reshare]` 自然语言重发
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否允许在聊天里用自然语言让机器人重发分享过的视频 |
+| `trigger_keywords` | 见配置 | 触发词，消息里要出现其中之一（再发一遍/重发/再分享…） |
+| `history_keywords` | 见配置 | 指代词，消息里还要出现其中之一（之前/上次/那个/你发过…） |
+| `match_window_days` | `60` | 在多长时间内的分享记录里查找（天） |
+| `min_match_score` | `0.25` | 标题模糊匹配的最低相似度（0~1，越低越宽松） |
+| `reply_enabled` | `true` | 重发后是否回一句确认（如「好嘞，再发一遍～」） |
+
+同时命中「触发词 + 指代词」才会触发，避免误判；重发时**直接复用当时存下的介绍文案和推荐语**，不重新生成。
+
+> 重发**只对白名单会话（`[[streams]]`）生效**，避免插件变成任意群都能指挥的转发器。
+
+### `[shiwei]` 赤石视频
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否启用 `/赤石视频` 指令 |
+| `cooldown_seconds` | `600` | 该指令的冷却（秒） |
+| `max_share` | `1` | 一次最多分享几个 |
+| `keywords` | 见配置 | 搜索关键词（抽象/整活/鬼畜/离谱/翻车/整蛊/土味/迷惑行为…） |
+| `search_keywords_per_round` | `2` | 每次用几个关键词去搜 |
+| `min_play` | `20000` | 最低播放量 |
+| `min_duration_seconds` | `10` | 视频最短时长（秒） |
+| `max_duration_seconds` | `900` | 视频最长时长（秒） |
+| `block_keywords` | 见配置 | 命中即跳过（官方/预告/发布会/宣传片） |
+
+`/赤石视频` 只发「【标题】链接」，**不带介绍文案**，也不影响普通分享的去重与冷却。这条路径同样会过 `[filter]` 的全局过滤（`block_keywords`、`block_up_names`、`exclude_official`），并且**只对白名单会话生效**。
+
+### `[read]` 读视频
+
+这个插件不只是「往外发」，也能「往里读」。两条入口共用同一套读取逻辑：
+
+1. **工具 `bili_read`**：把「读取 B 站视频内容」作为工具交给麦麦。你贴链接、或者问「这视频讲了什么」「值不值得看」时，它会自己调用工具，拿到的是接口里的真实数据，而不是靠标题猜。参数是 `url`（链接 / BV 号 / av 号都行）。
+
+   这个工具对 Planner **直接可见**（声明里的 `visibility="visible"`），不需要先 `tool_search`，所以模型不用为了「看见工具」去派子代理；一次调用通常 1 秒内返回。代价是 Planner 每轮多一条工具说明（不到 100 token）。
+2. **贴链接自动读**：白名单会话里（`[[streams]]`）有人贴了 B 站链接，插件会立刻读一遍，把内容写进当前会话上下文（`maisaka.context.append`），麦麦下一条回复就能自然聊起来，不用等它主动调工具。
+
+读到的内容包括：标题 / UP 主 / 分区 / 时长 / 播放·弹幕·评论·点赞·投币·收藏 / 发布时间 / 分P 列表 / 标签 / 简介 / CC 字幕节选 / 热评 / 弹幕采样。任何一项拿不到就跳过，不会因为缺字幕整条失败。
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否启用 `bili_read` 工具（关掉后麦麦就调不到它了） |
+| `auto_read_enabled` | `true` | 白名单会话里贴链接时是否自动读 |
+| `auto_read_max_links` | `1` | 一条消息最多自动读几个链接（`1`~`3`，防止刷屏） |
+| `comment_limit` | `8` | 读几条热评（`0`~`20`） |
+| `danmaku_limit` | `30` | 采样多少条弹幕（`0`~`100`） |
+| `use_subtitle` | `true` | 是否读 CC 字幕（需要登录 Cookie） |
+| `max_chars` | `3500` | 交给模型的内容上限，太长会按顺序截断 |
+| `cache_seconds` | `900` | 同一个视频多少秒内复用缓存（也用作自动读的防重复窗口） |
+
+同一条视频在 `cache_seconds` 内被重复读到会直接走缓存，不会反复打 B 站接口。短链（`b23.tv` / `bili2233.cn`）会先跟随跳转再解析。
+
+### `[advanced]` 运行参数
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `data_dir` | `""` | 状态文件目录；留空用宿主给的数据目录 `data/plugins/<插件ID>` |
+| `request_timeout_seconds` | `12.0` | 单次 B 站请求超时（秒） |
+| `user_agent` | 见配置 | 请求用的浏览器标识 |
+| `cookie` | `""` | **（旧版）** Cookie，已迁移到 `[account].cookie`，仅为兼容保留 |
+| `ffmpeg_path` | `""` | 自定义 ffmpeg 路径；留空自动查找（imageio-ffmpeg / PATH） |
+| `dedupe_days` | `30` | 同一视频多少天内不重复分享 |
+| `max_seen_records` | `3000` | 最多保留多少条已分享记录（超过淘汰最旧的） |
+| `debug` | `false` | 是否输出调试日志（排查问题时打开） |
+
+### `[[streams]]` 白名单聊天流
+
+想分享到哪个群 / 私聊，就加一段 `[[streams]]`，可以写多段。
+
+```toml
+[[streams]]
+name = "原神群"                    # 备注名
+enabled = true                    # 是否启用
+stream_id = ""                    # 会话 ID，填了优先级最高
+group_id = "123456789"            # 群号
+user_id = ""                      # 私聊用户 ID
+interests = ["原神", "机械键盘"]     # 手写兴趣
+auto_interests = []               # 自动提取的兴趣（插件写，可手改）
+categories = []                   # 启用的内容类别名，留空=全部启用的类别
+auto_interest = true              # 是否从该流近期聊天自动提取兴趣
+max_share_per_round = 0           # 该流每轮最多几个，0 = 用 [schedule] 的值
+```
+
+| 键 | 说明 |
+| --- | --- |
+| `name` | 备注名 |
+| `enabled` | 是否启用 |
+| `stream_id` | 聊天流 ID（session_id），填了优先级最高 |
+| `group_id` | 群号，未填 `stream_id` 时按群号反查 |
+| `user_id` | 私聊用户 ID，前两者都空时按用户反查 |
+| `interests` | 手写兴趣词（权重 `[interest].explicit_weight`） |
+| `auto_interests` | 自动提取的兴趣，插件会写回这里；手动改过即锁定，清空可恢复自动维护 |
+| `categories` | 该流启用的类别名，留空 = 全部启用的类别 |
+| `auto_interest` | 是否从该流近期聊天自动提取兴趣 |
+| `max_share_per_round` | 该流每轮最多几个，`0` = 用 `[schedule]` 的值 |
+
+---
+
+## 指令
+
+| 指令 | 别名 | 说明 |
+| --- | --- | --- |
+| `/扫码登录` | `/bili-login` `/扫码登陆` | 发二维码扫码登录 B 站，成功后自动保存 Cookie（**仅私聊可用**） |
+| `/bili-share` | `/b站分享` | 立即跑一轮（无视自动频率，仍受活跃时段限制） |
+| `/bili-status` | — | 查看登录状态、频率、白名单、各会话兴趣、下一轮时间、记录统计 |
+| `/bili-test` | — | 预览本轮候选与前 5 名打分，只把预览发回当前会话，**不分享视频** |
+| `/bili-search 关键词` | `/b站搜索` | 主动搜索并分享，受 `search_cooldown_seconds` 冷却；**只在白名单会话里生效** |
+| `/赤石视频` | — | 抓一个抽象整活视频，只发标题+链接；**只在白名单会话里生效** |
+| `/读视频 链接或BV号` | `/bili-read` | 读这个视频并把摘要发回当前会话（简介/分P/字幕/热评/弹幕）；平时贴链接会自动读，这条是手动预览 |
+
+---
+
+## 工作原理
+
+```
+定时触发（interval + 抖动）
+  ├─ 检查：插件启用 / 在活跃时段 / 有白名单流
+  ├─ 对每个白名单流：
+  │    ├─ 解析会话（同群多套会话时自动兜底到能发出去的那个）
+  │    └─ 构建兴趣画像：手写兴趣 + 聊天提取（写回 auto_interests）+ 人设初始兴趣
+  ├─ 收集搜索关键词（兴趣词 + 启用的内容类别关键词）
+  ├─ 抓候选：关键词搜索 / 热门 / 排行榜 → 合并去重
+  ├─ 硬过滤：时长、播放、点赞、发布天数、屏蔽词、官方内容
+  ├─ 去重：踢掉已分享过的 bvid
+  ├─ 打分排序 → 取前 N（min_score / require_interest_match）
+  ├─ 对候选做深度理解：
+  │    ├─ 读标签 / 字幕（需登录）
+  │    ├─ 读弹幕（过滤 AI 鱼灾）+ 热门评论
+  │    ├─ 下载视频抽 4 帧（vlm 任务识图）
+  │    └─ 读人设 → LLM 判断是否贴合兴趣 → 按人设口吻生成推荐语 + 介绍
+  ├─ 发送：默认「随口一提」一条；关掉后分条发（推荐语 / 标题+链接 / 介绍）
+  └─ 写入 state.json（去重名单 + 分享记录 + 冷却时间）
+```
+
+---
+
+## 数据文件
+
+状态存在 `<data_dir>/state.json`（`data_dir` 默认取宿主给插件的数据目录，一般是 `data/plugins/github.BsXinQin.bilibili_video_watch/`）：
+
+```json
+{
+  "version": 2,
+  "seen": { "BV1xx": { "title": "...", "shared_at": 1760000000, "kind": "auto" } },
+  "runs": [ { "at": 1760000000, "fetched": 120, "shared": 1 } ],
+  "cooldowns": { "search": 1760000000, "shiwei": 1760000000 },
+  "auto_interests": { "group_id:123456789": ["原神", "机械键盘"] }
+}
+```
+
+- 名单里的视频**不会再被自动抓取/分享**，但仍可通过自然语言要求重发
+- 每条分享记录保存了当时的 `narrative`（介绍文案）与 `intro`（推荐语），重发时直接复用；旧版本留下的 `summary` / `points` 仍兼容读取
+- `auto_interests` 记录「插件上次写了什么」，用来判断你有没有手动改过
+- 删除 `state.json` 等于「忘掉所有历史」，下次会重新分享
+
+---
+
+## 目录结构
+
+```
+github.BsXinQin.bilibili_video_watch/
+├── _manifest.json        # 插件清单（宿主识别用）
+├── CHANGELOG.md          # 版本变更记录
+├── README.md             # 本文档
+├── config.example.toml   # 带中文注释的配置模板（可复制成 config.toml）
+├── config.py             # 配置模型（WebUI 表单由它生成，全中文）
+├── config_edit.py        # 把扫码得到的 Cookie / 自动兴趣写回 config.toml
+├── plugin.py             # 插件主体：调度、抓取、打分、分享、指令、Hook
+├── bilibili.py           # B 站接口客户端（WBI 签名、搜索、详情、弹幕、评论、字幕）
+├── bilibili_login.py     # 扫码登录（二维码生成 / 轮询 / 校验登录态）
+├── interest.py           # 兴趣关键词提取与打分
+├── textfilter.py         # AI 鱼灾弹幕/评论过滤
+├── media.py              # 取流下载 + ffmpeg 抽帧
+├── llm_judge.py          # LLM 语义判断、自然语言介绍、推荐语、人设兴趣种子
+├── persona.py            # 通过宿主 config.get 能力读人设，提供人设提示词
+├── store.py              # 去重名单、分享历史、冷却状态、自动兴趣缓存（state.json）
+├── tools/
+│   ├── live_check.py     # 真实联网自检（可选抽帧/弹幕/LLM/赤石）
+│   ├── probe_persona.py  # 人设自检：打印读到的人设 + 注入后的 prompt（不调模型）
+│   └── probe_vision.py   # 单独验证「下载 + 抽帧」链路
+├── tests/                # unittest 单元测试（304 个用例）
+├── build.py              # 打发布包：dist/github.BsXinQin.bilibili_video_watch-<版本>.zip
+└── .github/workflows/    # GitHub Actions：每次 push 自动跑单元测试
+```
+
+---
+
+## 测试与自检
+
+单元测试（304 个用例，不需要联网）：
+
+```powershell
+# 用 MaiBot 所在环境的 python
+& "<MaiBot>\.onekey\environments\<env>\python.exe" -X utf8 -m unittest discover -s tests
+```
+
+如果环境里没装依赖，先补上（`imageio-ffmpeg` 只在抽帧时用到，测试里会跳过）：
+
+```powershell
+& "<MaiBot>\.onekey\environments\<env>\python.exe" -m pip install maibot-plugin-sdk httpx segno tomlkit imageio-ffmpeg
+```
+
+打发布包（产物在 `dist/`，顶层目录就是插件 id，版本号读自 `_manifest.json`）：
+
+```powershell
+python build.py
+```
+
+CI：`.github/workflows/tests.yml` 在 push / PR 时用 Python 3.13 装依赖并跑同一套 `unittest`。
+
+覆盖：兴趣提取与打分、B 站客户端（httpx.MockTransport）、扫码登录、弹幕/评论解析与鱼灾过滤、抽帧帧选择、LLM 判断降级、人设读取与提示词注入、自动兴趣写回与锁定、人设兴趣种子、插件完整轮次、去重、冷却、重发（含白名单约束）、赤石（含全局屏蔽词）、指令（含白名单与参数解析）、类别级每轮上限、下载地址与 bvid 安全校验、配置模板与文档一致性，以及用宿主真实 `ManifestValidator` / `PluginLoader` 校验打包。
+
+真实联网自检：
+
+```powershell
+# 基本一轮：搜索「机械键盘」「原神」，分享 2 个
+python tools/live_check.py 机械键盘 原神 --limit 2
+
+# 带弹幕/评论 + 分条格式
+python tools/live_check.py 原神 --limit 2 --danmaku --parts
+
+# 走完整 LLM 判断（需要宿主环境能调 planner）
+python tools/live_check.py 原神 --limit 1 --llm
+
+# 验证 /赤石视频
+python tools/live_check.py --shiwei --limit 2 --parts
+
+# 单独验证下载 + 抽帧（不调 LLM）
+python tools/probe_vision.py --save ..\bili-frames
+
+# 人设自检：打印读到的人设和注入后的 prompt（不调模型）
+python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.bilibili_video_watch"
+```
+
+> `probe_persona.py` 是开发自检脚本，直接解析实例里的 `config/bot_config.toml` 来模拟宿主的 `config.get` 返回值；插件运行时并不直接读文件。
+
+---
+
+## 常见问题
+
+**Q：`/扫码登录` 没反应 / 收不到二维码图片？**
+确认插件已加载（`/bili-status` 有响应），并检查宿主是否提供 `send.image` 能力。图片发不出去时会自动改发登录链接文本，仍可用浏览器打开扫码。
+
+**Q：登录成功了，但字幕还是读不到？**
+字幕是 B 站按视频和登录态返回的，不是每个视频都有（很多视频根本没上传字幕）。登录能显著提高覆盖率，但不能保证 100%。
+
+**Q：自动兴趣一直不更新？**
+两种可能：① 你把 `auto_interests` 手动改过了，插件认为你接管了——清空它即可恢复自动维护；② 该流 `auto_interest = false` 或 `use_recent_chat = false`。
+
+**Q：某个群一直不分享？**
+用 `/bili-status` 看白名单是否包含它；用 `/bili-test` 看是否所有候选都被过滤或分数不够。`min_score` 过高、`require_interest_match = true` 且兴趣词太少都会导致选不出视频。
+
+**Q：配置页显示的版本号对不上 GitHub 最新 Release？**
+配置页显示的是**当前安装的插件包**里的 `config_version`。宿主升级插件包后会自动把配置版本迁移到新版；如果市场还没收录新版本，需要等审核通过后从市场更新。
+
+**Q：换连接器 / 适配器后发不出去？**
+换账号后同一个群可能同时存在旧账号和新账号两套会话，宿主接口可能返回已掉线的那套。插件会枚举同群/同用户的会话，发送失败时自动换一个重试并记住可用的那个。
+
+---
+
+## 已知限制
+
+- **只用公开接口**，不登录也能工作；但 B 站有风控，请求过密可能返回 `-352`，插件会自动重试一次（重新取 WBI 密钥）后放弃本轮。
+- **字幕需要登录**：未登录时 B 站不返回字幕内容，只能靠标题/简介/弹幕/画面判断。
+- **排行榜接口**风控较严，未配 Cookie 时基本拿不到数据，所以默认关闭。
+- **抽帧依赖 ffmpeg**：都没有时自动跳过识图，其余流程正常。
+- **识图需要支持视觉的模型**：默认 `vlm` 任务；没有就把 `[vision].task_name` 改成支持图片的模型任务名，或关掉 `[vision].enabled`。
+- **LLM 判断有成本**：`llm_max_candidates` 控制每轮最多判断几个，默认 5。
+- **人设依赖宿主配置**：通过 `config.get` 读取；读不到时退回中性语气，不影响分享。
+- 分享的是**文本卡片 + 链接**，不会把视频文件发到群里。
+- **Cookie 以明文存盘**：写在插件目录的 `config.toml` 里，注意不要泄露或提交到公开仓库。
+- 请遵守 B 站服务条款，不要把频率调得过低（`interval_minutes` 建议 ≥ 10）。
+
+---
+
+## 版本
+
+- **v1.0.0**：首个发布版本（本项目从上游「麦麦刷B站」2.1.2 起独立维护，版本号重新从 1.0.0 计；插件 id 不变，可直接覆盖升级）。
+  - **定时刷 B 站**：抓热门 / 排行榜 / 搜索候选，LLM 按当前会话兴趣挑选后生成分享卡片发到白名单会话；兴趣可手写、可从聊天自动提取、可用人设初始兴趣兜底。
+  - **能读视频**：`bili_read` 工具与 `/读视频` 指令（别名 `/bili-read`），支持链接 / BV / av / 短链，返回简介、分P、CC 字幕、热评、弹幕采样；白名单会话里贴链接还会自动读进上下文。
+  - **扫码登录**：`/扫码登录`（仅私聊可用），扫码后 Cookie 自动写入 `[account].cookie` 并立即生效。
+  - **稳定性**：包内相对导入 + 顶层导入兜底、`get_components()` 提升 `chat_scope`、`bili_read` 对 Planner 直接可见（不再被派给子代理空转等待）。
+  - 上游 2.x 的历史记录见 [CHANGELOG-upstream.md](CHANGELOG-upstream.md)，本版完整说明见 [CHANGELOG.md](CHANGELOG.md)。

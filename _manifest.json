@@ -1,0 +1,45 @@
+{
+  "manifest_version": 2,
+  "id": "github.BsXinQin.bilibili_video_watch",
+  "version": "1.0.0",
+  "name": "沁の刷B站视频",
+  "description": "定时刷 B 站，按白名单聊天流的用户兴趣挑选有趣的视频分享；也能反过来读视频（bili_read 工具 + 贴链接自动读，能把简介、分P、字幕、热评、弹幕交给麦麦）。支持抽帧看画面、读弹幕与热门评论、LLM 语义判断与内容总结、按 MaiBot 人设口吻写分享文案、已刷名单、主动搜索与 /赤石视频。刷取频率可在配置中调节，每个配置项都带中文注释。",
+  "author": {
+    "name": "BsXinQin",
+    "url": "https://github.com/BsXinQin"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/BsXinQin/bilibili_video_watch"
+  },
+  "plugin_type": "integration",
+  "host_application": {
+    "min_version": "1.3.0",
+    "max_version": "1.3.99"
+  },
+  "sdk": {
+    "min_version": "2.12.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [
+    {
+      "type": "python_package",
+      "name": "imageio-ffmpeg",
+      "version_spec": ">=0.4.9"
+    }
+  ],
+  "capabilities": [
+    "maisaka.context.append",
+    "send.text",
+    "send.image",
+    "chat.get_stream_by_group_id",
+    "chat.get_stream_by_user_id",
+    "message.get_recent",
+    "llm.generate",
+    "config.get",
+    "chat.get_all_streams"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN"
+  }
+}
