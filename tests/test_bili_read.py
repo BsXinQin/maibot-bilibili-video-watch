@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -441,7 +442,7 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
 
     def _make_plugin(self, **overrides):
         config = {
-            "plugin": {"enabled": True, "config_version": "1.2.0"},
+            "plugin": {"enabled": True, "config_version": "1.2.1"},
             "read": {
                 "enabled": True,
                 "auto_read_enabled": True,
@@ -503,6 +504,43 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["danmaku_limit"], 120)
         self.assertEqual(call["subtitle_chars"], 12000)
         self.assertIn("深度读：完整字幕时间轴", result["content"])
+
+    async def test_tool_detail_full_includes_vision(self) -> None:
+        called = {}
+
+        async def fake_describe(brief):
+            called["bvid"] = brief.bvid
+            return "画面里是提瓦特大陆的夜景"
+
+        self.plugin._describe_video_frames = fake_describe
+        result = await self.plugin.tool_bili_read(url="BV1TEST00001", detail="full")
+        self.assertTrue(result["success"], result)
+        self.assertEqual(called.get("bvid"), "BV1TEST00001")
+        self.assertIn("【画面描述（抽帧）】", result["content"])
+        self.assertIn("提瓦特大陆的夜景", result["content"])
+
+    async def test_tool_detail_full_without_vision_keeps_text(self) -> None:
+        self.plugin._describe_video_frames = _no_vision
+        result = await self.plugin.tool_bili_read(url="BV1TEST00001", detail="full")
+        self.assertTrue(result["success"], result)
+        self.assertIn("深度读：完整字幕时间轴", result["content"])
+        self.assertNotIn("【画面描述（抽帧）】", result["content"])
+
+    async def test_tool_detail_brief_skips_vision(self) -> None:
+        async def boom(brief):
+            raise AssertionError("brief 模式不该抽帧")
+
+        self.plugin._describe_video_frames = boom
+        result = await self.plugin.tool_bili_read(url="BV1TEST00001")
+        self.assertTrue(result["success"], result)
+        self.assertNotIn("画面描述", result["content"])
+
+    async def test_tool_detail_full_reuses_cached_vision(self) -> None:
+        # 缓存命中时不再走视觉模型：即使 _describe_video_frames 被换掉也能返回缓存内容
+        self.plugin._vision_cache["BV1TEST00001"] = (time.time(), "缓存里的画面描述")
+        result = await self.plugin.tool_bili_read(url="BV1TEST00001", detail="full")
+        self.assertTrue(result["success"], result)
+        self.assertIn("缓存里的画面描述", result["content"])
 
     async def test_tool_without_target(self) -> None:
         result = await self.plugin.tool_bili_read(url="")
@@ -644,6 +682,53 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
         deep["processed_plain_text"] = "详细看看 https://www.bilibili.com/video/BV1TEST00001"
         await self.plugin._maybe_auto_read(deep)
         self.assertEqual(len(self.appender.calls), 2)
+
+    async def test_auto_read_private_stream_defaults_to_full(self) -> None:
+        plugin = self._make_plugin(
+            streams=[{"name": "私聊", "enabled": True, "stream_id": "stream-p", "user_id": "123"}]
+        )
+        called = {}
+
+        async def fake_describe(brief):
+            called["bvid"] = brief.bvid
+            return "画面里有一只猫"
+
+        plugin._describe_video_frames = fake_describe
+        await plugin._maybe_auto_read(
+            {"stream_id": "stream-p", "processed_plain_text": "https://www.bilibili.com/video/BV1TEST00001"}
+        )
+        self.assertEqual(called.get("bvid"), "BV1TEST00001")
+        self.assertEqual(len(self.appender.calls), 1)
+        content = self.appender.calls[0]["segments"][0]["content"]
+        self.assertIn("深度读", content)
+        self.assertIn("画面里有一只猫", content)
+
+    async def test_auto_read_private_respects_full_in_private_off(self) -> None:
+        async def boom(brief):
+            raise AssertionError("关掉 full_in_private 后私聊不该抽帧")
+
+        plugin = self._make_plugin(
+            read={"full_in_private": False},
+            streams=[{"name": "私聊", "enabled": True, "stream_id": "stream-p", "user_id": "123"}],
+        )
+        plugin._describe_video_frames = boom
+        await plugin._maybe_auto_read(
+            {"stream_id": "stream-p", "processed_plain_text": "https://www.bilibili.com/video/BV1TEST00001"}
+        )
+        self.assertEqual(len(self.appender.calls), 1)
+        self.assertIn("快速读", self.appender.calls[0]["segments"][0]["content"])
+
+    async def test_auto_read_group_stream_stays_brief(self) -> None:
+        # 群聊没有 user_id，即使 full_in_private 打开也不该升级
+        async def boom(brief):
+            raise AssertionError("群聊贴链接不该抽帧")
+
+        self.plugin._describe_video_frames = boom
+        await self.plugin._maybe_auto_read(
+            {"stream_id": "stream-1", "processed_plain_text": "https://www.bilibili.com/video/BV1TEST00001"}
+        )
+        self.assertEqual(len(self.appender.calls), 1)
+        self.assertIn("快速读", self.appender.calls[0]["segments"][0]["content"])
 
 
 class FullReadTriggerTests(unittest.TestCase):

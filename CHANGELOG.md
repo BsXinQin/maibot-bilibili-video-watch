@@ -5,6 +5,24 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.2.1] - 2026-11-08
+
+修「麦麦认真看视频时只看文字、不看画面」：抽帧识图原来只挂在贴链接自动读那条链路上，麦麦自己调 `bili_read` 传 `detail="full"` 时并不经过它。
+
+### 修复
+
+- `bili_read` 的 `full` 现在也会抽帧交给视觉模型：返回内容末尾追加 `【画面描述（抽帧）】` 段落，和自动读的效果一致（仍需 `[read].full_vision_enabled` 与可用的 `vlm` 任务）。
+- `detail="brief"` 仍然完全不调视觉模型，省 token 的行为不变。
+
+### 新增
+
+- 画面描述按 `bvid` 缓存 `[read].cache_seconds` 秒，自动读和工具读共用，同一个视频不会重复抽帧。
+- `[read]` 新增 `full_in_private`（默认 `true`）：白名单里按「私聊用户 ID」配置的会话，贴链接默认按 full 深度读——私聊没有 @，贴链接本身就是特意让麦麦看。关掉则私聊只认 @ 与 `full_trigger_keywords`。
+
+### 变更
+
+- 白名单解析时记录哪些会话属于私聊（按 `user_id` 配置且没填 `group_id`），供上面的默认深度读判断使用。
+
 ## [1.2.0] - 2026-11-07
 
 按实际使用反馈做一次减法：聊天指令在 QQ 平台会被拦截，扫码登录用不上，读视频也要区分「随便看看」和「认真看看」。

@@ -42,7 +42,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.2.0",
+        default="1.2.1",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -926,6 +926,14 @@ class ReadConfig(PluginConfigBase):
         le=3,
         description="一条消息最多自动读几个链接",
         json_schema_extra={"label": "单条消息最多读几个"},
+    )
+    full_in_private: bool = Field(
+        default=True,
+        description=(
+            "私聊（白名单里按「私聊用户 ID」配置的会话）里贴 B 站链接时，直接按 full 深度读"
+            "（含抽帧看画面）；关掉则私聊也只认 @ 和深度读触发词"
+        ),
+        json_schema_extra={"label": "私聊默认深度读"},
     )
     comment_limit: int = Field(
         default=8,

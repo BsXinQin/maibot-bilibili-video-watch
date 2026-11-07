@@ -388,6 +388,10 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         # 读视频（bili_read）：按视频缓存的解析结果 + 自动读的防重复表
         self._read_cache: Optional[VideoCache] = None
         self._auto_read_seen: Dict[str, float] = {}
+        # 画面描述缓存（bvid -> (时间戳, 描述)），自动读和工具读共用，避免重复抽帧
+        self._vision_cache: Dict[str, Tuple[float, str]] = {}
+        # 白名单里按 user_id 配置的私聊会话：贴链接默认按深度读
+        self._private_stream_ids: Set[str] = set()
 
     # -- 生命周期 ------------------------------------------------------
 
@@ -414,6 +418,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         )
         self._read_cache = VideoCache(ttl_seconds=int(config.read.cache_seconds))
         self._auto_read_seen.clear()
+        self._vision_cache.clear()
         self._frames = FrameExtractor(
             ffmpeg_path=config.advanced.ffmpeg_path,
             frame_count=config.vision.frame_count,
@@ -1087,15 +1092,24 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
 
         config = self.config
         allowed: Set[str] = set()
+        private: Set[str] = set()
         for target in config.streams or []:
             if not getattr(target, "enabled", False):
                 continue
             stream_id = await self._resolve_stream(target)
             if stream_id:
                 allowed.add(stream_id)
+                is_private = bool(str(getattr(target, "user_id", "") or "").strip()) and not str(
+                    getattr(target, "group_id", "") or ""
+                ).strip()
+                if is_private:
+                    private.add(stream_id)
                 for alternative in self._stream_fallbacks.get(stream_id, ()):
                     allowed.add(alternative)
+                    if is_private:
+                        private.add(alternative)
         self._allowed_stream_ids = allowed
+        self._private_stream_ids = private
         self._allowed_streams_at = time.time()
         return allowed
 
@@ -1917,7 +1931,8 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             "「值不值得看」时，先调用它拿到内容，不要凭标题猜。"
             "它一次调用通常 1 秒内返回，在当前对话里直接调用即可，不需要交给子代理；"
             "如果上下文里已经有这个视频的读取结果，就不用重复读。"
-            "想看细节（逐段讲了什么、哪里有高能）时传 detail=full，会返回字幕时间轴和弹幕时间线。"
+            "想看细节（逐段讲了什么、哪里有高能）时传 detail=full，会返回字幕时间轴、弹幕时间线；"
+            "视觉模型可用时还会抽帧看画面，把画面描述一起返回。"
         ),
         parameters=[
             ToolParameterInfo(
@@ -1968,6 +1983,10 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         except Exception as exc:  # noqa: BLE001 - 工具里不能抛错
             logger.warning("bili_read 读取失败：%s", exc, exc_info=self._debug_enabled())
             return {"success": False, "error": f"读取视频失败：{exc}"}
+        if detail == "full":
+            vision_text = await self._describe_video_frames(brief)
+            if vision_text:
+                content = f"{content}\n\n【画面描述（抽帧）】\n{vision_text}"
         logger.info("bili_read 读取成功：%s（%s）", brief.title, brief.bvid)
         return {
             "success": True,
@@ -2029,6 +2048,9 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             return
 
         deep = wants_full_read(message, text, config.read.full_trigger_keywords)
+        # 私聊里没有 @ 这种操作，对着麦麦贴链接本身就是「特意让我看」，默认深度读
+        if not deep and getattr(config.read, "full_in_private", False):
+            deep = stream_id in self._private_stream_ids
         mode = "full" if deep else "brief"
         now = time.time()
         window = max(60.0, float(config.read.cache_seconds))
@@ -2080,6 +2102,11 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         config = self.config
         if not config.read.full_vision_enabled or not config.vision.enabled:
             return ""
+        cache_key = str(brief.bvid or "").strip()
+        if cache_key:
+            cached = self._vision_cache.get(cache_key)
+            if cached and time.time() - cached[0] < float(config.read.cache_seconds):
+                return cached[1]
         judge = self._judge
         if judge is None or not getattr(judge, "available", False):
             logger.debug("视觉模型不可用，跳过 full 模式的画面描述")
@@ -2098,7 +2125,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             logger.debug("没有抽到画面，full 模式只返回文字内容")
             return ""
         try:
-            return await asyncio.wait_for(
+            description = await asyncio.wait_for(
                 judge.describe_frames(video, frames),
                 timeout=float(config.vision.timeout_seconds),
             )
@@ -2107,6 +2134,9 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         except Exception as exc:  # noqa: BLE001 - 画面描述失败不影响文字内容
             logger.debug("画面描述失败 %s：%s", brief.bvid, exc)
             return ""
+        if description and cache_key:
+            self._vision_cache[cache_key] = (time.time(), description)
+        return description
 
     # -- 重发（聊天自然语言触发） --------------------------------------
 
