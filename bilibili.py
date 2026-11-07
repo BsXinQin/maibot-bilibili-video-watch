@@ -30,6 +30,8 @@ RANKING_URL = "https://api.bilibili.com/x/web-interface/ranking/v2"
 NAV_URL = "https://api.bilibili.com/x/web-interface/nav"
 SEARCH_URL = "https://api.bilibili.com/x/web-interface/wbi/search/type"
 BILIBILI_REFERER = "https://www.bilibili.com/"
+# 匿名请求被风控（HTTP 412）时，用它申请 buvid3/buvid4 Cookie
+FINGER_SPI_URL = "https://api.bilibili.com/x/frontend/finger/spi"
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -407,6 +409,7 @@ class _BilibiliClientBase:
             "User-Agent": user_agent or DEFAULT_USER_AGENT,
             "Referer": BILIBILI_REFERER,
             "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
         if cookie and cookie.strip():
             headers["Cookie"] = cookie.strip()
@@ -418,6 +421,8 @@ class _BilibiliClientBase:
             transport=transport,
         )
         self._signer = WbiSigner()
+        # 只在真的撞上 412 时才去申请 buvid，避免每次构造客户端都多打一次接口
+        self._buvid_tried = False
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -444,13 +449,57 @@ class _BilibiliClientBase:
 
         return str(self._client.headers.get("Cookie") or "")
 
+    async def _bootstrap_buvid(self) -> bool:
+        """向 B 站申请 buvid3/buvid4 并写进 Cookie（只尝试一次）。
+
+        匿名请求撞上 HTTP 412 风控时，补上 buvid 通常能恢复；已有 Cookie 时
+        只补充缺失的 buvid 项，不动用户自己的 SESSDATA。
+        """
+
+        if self._buvid_tried:
+            return False
+        self._buvid_tried = True
+        try:
+            response = await self._client.get(FINGER_SPI_URL)
+            payload = response.json()
+        except (httpx.HTTPError, ValueError):
+            return False
+        if response.status_code != 200 or not isinstance(payload, dict):
+            return False
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return False
+        b3 = _as_str(data.get("b_3")).strip()
+        b4 = _as_str(data.get("b_4")).strip()
+        if not b3:
+            return False
+        parts = [
+            item.strip()
+            for item in self.cookie.split(";")
+            if item.strip() and not item.strip().startswith(("buvid3=", "buvid4="))
+        ]
+        parts.append(f"buvid3={b3}")
+        if b4:
+            parts.append(f"buvid4={b4}")
+        self._client.headers["Cookie"] = "; ".join(parts)
+        return True
+
     async def _request_json(self, url: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """发请求并解析 JSON，不校验业务 ``code``。"""
 
         try:
             response = await self._client.get(url, params=params)
+            # 412 是 B 站风控拦在 WAF 层，补一次 buvid Cookie 后重试往往就能过
+            if response.status_code == 412 and await self._bootstrap_buvid():
+                response = await self._client.get(url, params=params)
         except httpx.HTTPError as exc:
             raise BilibiliError(f"请求 B 站失败：{exc}") from exc
+        if response.status_code == 412:
+            raise BilibiliError(
+                "B 站接口返回 HTTP 412（风控拦截）：这台服务器的网络环境被 B 站限制了。"
+                "可以在插件配置的「账号登录 → B 站 Cookie」里填上 Cookie（或在聊天里发 /扫码登录 扫码），"
+                "再读一次；填了 Cookie 仍然 412 就说明是该服务器 IP 被风控，需要换网络或走代理。"
+            )
         if response.status_code != 200:
             raise BilibiliError(f"B 站接口返回 HTTP {response.status_code}")
         try:

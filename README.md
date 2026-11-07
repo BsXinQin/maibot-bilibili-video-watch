@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.0.0-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.0.1-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -9,7 +9,7 @@
 
 插件会读视频的标签、字幕、弹幕和热门评论，必要时**下载视频抽几帧看画面**，再让 LLM 判断「这视频到底讲了什么、值不值得分享」，最后用**符合人设口吻的自然语言**说出来，像群友随口安利那样。
 
-> 当前版本 **v1.0.0** · 全部配置项已中文化 · 支持手机扫码登录 B 站 · 能读视频
+> 当前版本 **v1.0.1** · 全部配置项已中文化 · 支持手机扫码登录 B 站 · 能读视频
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -163,7 +163,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.0.0"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.0.1"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -631,6 +631,9 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 **Q：配置页显示的版本号对不上 GitHub 最新 Release？**
 配置页显示的是**当前安装的插件包**里的 `config_version`。宿主升级插件包后会自动把配置版本迁移到新版；如果市场还没收录新版本，需要等审核通过后从市场更新。
 
+**Q：读视频报「B 站接口返回 HTTP 412」？**
+412 是 B 站 WAF 层的风控拦截，不是接口参数错。常见原因是服务器（云主机 / 机房 IP）被风控，或者匿名请求没带 `buvid` Cookie。1.0.1 起插件会先自动申请 `buvid3`/`buvid4` 并重试一次；仍然 412 就在配置里填 `[account] cookie`（或聊天里发 `/扫码登录`），登录态能绕过大部分风控。填了 Cookie 还报 412，说明是该出口 IP 被限制，需要换网络或走代理。
+
 **Q：换连接器 / 适配器后发不出去？**
 换账号后同一个群可能同时存在旧账号和新账号两套会话，宿主接口可能返回已掉线的那套。插件会枚举同群/同用户的会话，发送失败时自动换一个重试并记住可用的那个。
 
@@ -638,7 +641,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 已知限制
 
-- **只用公开接口**，不登录也能工作；但 B 站有风控，请求过密可能返回 `-352`，插件会自动重试一次（重新取 WBI 密钥）后放弃本轮。
+- **只用公开接口**，不登录也能工作；但 B 站有风控：请求过密可能返回业务码 `-352`（自动重取 WBI 密钥重试一次），WAF 层则可能直接返回 HTTP `412`（自动补 `buvid` Cookie 重试一次）。两者都失败时请配置 Cookie 或换网络。
 - **字幕需要登录**：未登录时 B 站不返回字幕内容，只能靠标题/简介/弹幕/画面判断。
 - **排行榜接口**风控较严，未配 Cookie 时基本拿不到数据，所以默认关闭。
 - **抽帧依赖 ffmpeg**：都没有时自动跳过识图，其余流程正常。
@@ -653,6 +656,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v1.0.1**：修服务器 IP 撞上 B 站风控时读视频报 HTTP 412 的问题（自动申请 buvid Cookie 重试 + 可操作报错）。
 - **v1.0.0**：首个发布版本（本项目从上游「麦麦刷B站」2.1.2 起独立维护，版本号重新从 1.0.0 计；插件 id 不变，可直接覆盖升级）。
   - **定时刷 B 站**：抓热门 / 排行榜 / 搜索候选，LLM 按当前会话兴趣挑选后生成分享卡片发到白名单会话；兴趣可手写、可从聊天自动提取、可用人设初始兴趣兜底。
   - **能读视频**：`bili_read` 工具与 `/读视频` 指令（别名 `/bili-read`），支持链接 / BV / av / 短链，返回简介、分P、CC 字幕、热评、弹幕采样；白名单会话里贴链接还会自动读进上下文。

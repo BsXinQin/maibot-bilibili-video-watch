@@ -288,6 +288,70 @@ class BilibiliClientTest(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.aclose()
 
+    async def test_http_412_bootstraps_buvid_and_retries(self) -> None:
+        state = {"view": 0, "spi": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "finger/spi" in url:
+                state["spi"] += 1
+                return httpx.Response(200, json={"code": 0, "data": {"b_3": "B3-TOKEN", "b_4": "B4-TOKEN"}})
+            state["view"] += 1
+            if state["view"] == 1:
+                return httpx.Response(412, text="blocked")
+            cookie = request.headers.get("cookie", "")
+            state["cookie"] = cookie
+            return httpx.Response(200, json={"code": 0, "data": {"list": [_raw_video()]}})
+
+        client = self.module.BilibiliClient(transport=httpx.MockTransport(handler))
+        try:
+            videos = await client.fetch_popular()
+        finally:
+            await client.aclose()
+        self.assertEqual(len(videos), 1)
+        self.assertEqual(state["spi"], 1)
+        self.assertEqual(state["view"], 2)
+        self.assertIn("buvid3=B3-TOKEN", state.get("cookie", ""))
+        self.assertIn("buvid4=B4-TOKEN", state.get("cookie", ""))
+
+    async def test_http_412_keeps_extra_cookie(self) -> None:
+        state = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "finger/spi" in url:
+                return httpx.Response(200, json={"code": 0, "data": {"b_3": "B3", "b_4": "B4"}})
+            state["view"] = state.get("view", 0) + 1
+            if state["view"] == 1:
+                return httpx.Response(412, text="blocked")
+            state["cookie"] = request.headers.get("cookie", "")
+            return httpx.Response(200, json={"code": 0, "data": {"list": [_raw_video()]}})
+
+        client = self.module.BilibiliClient(
+            transport=httpx.MockTransport(handler), cookie="SESSDATA=abc123"
+        )
+        try:
+            await client.fetch_popular()
+        finally:
+            await client.aclose()
+        cookie = state.get("cookie", "")
+        self.assertIn("SESSDATA=abc123", cookie)
+        self.assertIn("buvid3=B3", cookie)
+
+    async def test_http_412_without_buvid_raises_actionable_error(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(412, text="blocked")
+
+        client = self.module.BilibiliClient(transport=httpx.MockTransport(handler))
+        try:
+            with self.assertRaises(self.module.BilibiliError) as ctx:
+                await client.fetch_popular()
+        finally:
+            await client.aclose()
+        message = str(ctx.exception)
+        self.assertIn("412", message)
+        self.assertIn("Cookie", message)
+
     async def test_malformed_payload_raises(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"code": 0, "data": None})

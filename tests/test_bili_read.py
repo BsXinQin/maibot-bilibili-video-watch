@@ -377,7 +377,7 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
 
     def _make_plugin(self, **overrides):
         config = {
-            "plugin": {"enabled": True, "config_version": "1.0.0"},
+            "plugin": {"enabled": True, "config_version": "1.0.1"},
             "read": {
                 "enabled": True,
                 "auto_read_enabled": True,

@@ -5,6 +5,18 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.0.1] - 2026-11-07
+
+修一个真机上才暴露的问题：服务器 IP 撞上 B 站风控时，读视频会直接失败。
+
+### 修复
+
+- `bili_read` 报「B 站接口返回 HTTP 412」时不再直接放弃：先向 `x/frontend/finger/spi` 申请 `buvid3`/`buvid4` 补进 Cookie 再重试一次，匿名访问的 412 大多就此恢复。
+- 已有 `SESSDATA` 的配置不会被覆盖，只补缺失的 buvid 项。
+- 仍然 412 时给出可操作的报错：提示去配置里填 Cookie 或 `/扫码登录`，并说明这属于服务器 IP 被风控、需要换网络或代理。
+- 请求头补上 `Accept-Language`，降低匿名请求被判为脚本的概率。
+- buvid 只在真的撞上 412 时才申请一次，不会给每次调用增加额外请求。
+
 ## [1.0.0] - 2026-11-07
 
 本项目的首个发布版本：功能对齐上游「麦麦刷B站」2.1.2，并改名为「沁の刷B站视频」，版本号重新从 1.0.0 起算。上游 2.x 的历史记录保留在 [CHANGELOG-upstream.md](CHANGELOG-upstream.md)。
