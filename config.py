@@ -18,6 +18,8 @@
 - ``[share]``：分享格式（随口一句 + 标题链接）
 - ``[shiwei]``：赤石视频工具专用配置
 - ``[advanced]``：数据目录、超时、去重等运行参数
+- ``[read]``：读视频（贴链接自动读、深度读、抽帧看画面）
+- ``[meme]``：学梗（把视频里的梗整理成梗卡写进麦麦黑话库）
 - ``[[streams]]``：白名单聊天流（数组表），每个流可单独配置兴趣与分享上限
 """
 
@@ -41,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.3.2",
+        default="1.4.0",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -883,6 +885,67 @@ class ReadConfig(PluginConfigBase):
         json_schema_extra={"label": "缓存时间（秒）"},
     )
 
+class MemeConfig(PluginConfigBase):
+    """学梗入库（把视频里的梗整理成梗卡，写进麦麦黑话库）。"""
+
+    __ui_label__ = "学梗"
+    __ui_icon__ = "graduation-cap"
+    __ui_order__ = 17
+
+    enabled: bool = Field(
+        default=False,
+        description="开启后可用 bili_learn_meme 工具从视频里学梗；默认关闭，避免自动往黑话库塞东西",
+        json_schema_extra={"label": "启用学梗"},
+    )
+    write_to_db: bool = Field(
+        default=True,
+        description="学到梗后写进麦麦的黑话库（关闭则只回一张梗卡，不写库）",
+        json_schema_extra={"label": "写入黑话库"},
+    )
+    auto_learn: bool = Field(
+        default=True,
+        description="贴的视频标题命中「梗 / 梗指南 / 什么梗」之类的词时，读完顺手学一次（同一个视频只学一次）",
+        json_schema_extra={"label": "梗类视频自动学"},
+    )
+    llm_task: str = Field(
+        default="",
+        description="用哪个模型任务来学梗；留空表示跟随「兴趣提取 / 语义判断」用的任务",
+        json_schema_extra={"label": "模型任务名"},
+    )
+    min_confidence: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description="模型给出的置信度低于这个值就不入库",
+        json_schema_extra={"label": "最低置信度"},
+    )
+    reject_taboo_strong: bool = Field(
+        default=True,
+        description="判定为高敏感（地域 / 民族 / 性别 / 灾难等）的梗直接丢掉，不入库",
+        json_schema_extra={"label": "拒绝高敏感梗"},
+    )
+    comment_limit: int = Field(
+        default=14,
+        ge=0,
+        le=30,
+        description="学梗时参考多少条热评（0 表示不看热评）",
+        json_schema_extra={"label": "参考热评条数"},
+    )
+    burst_window_seconds: int = Field(
+        default=10,
+        ge=5,
+        le=60,
+        description="弹幕爆发点的统计窗口（秒），越小越能定位到具体哪一段",
+        json_schema_extra={"label": "弹幕窗口（秒）"},
+    )
+    max_subtitle_chars: int = Field(
+        default=6000,
+        ge=500,
+        le=20000,
+        description="喂给模型的字幕上限（字符数）；字幕是唯一能当「来历」的依据",
+        json_schema_extra={"label": "字幕长度上限"},
+    )
+
 class StreamTargetConfig(PluginConfigBase):
     """白名单聊天流配置（数组表 ``[[streams]]``）。"""
 
@@ -1038,6 +1101,10 @@ class BilibiliInterestShareConfig(PluginConfigBase):
     read: ReadConfig = Field(
         default_factory=ReadConfig,
         description="读视频（bili_read 工具、贴链接自动读、热评/弹幕/字幕读取参数）",
+    )
+    meme: MemeConfig = Field(
+        default_factory=MemeConfig,
+        description="学梗（把视频里的梗整理成梗卡写进麦麦黑话库，默认关闭）",
     )
     streams: List[StreamTargetConfig] = Field(
         default_factory=list,

@@ -326,6 +326,21 @@ class LlmJudge:
             return text if isinstance(text, str) else str(text)
         return str(result or "")
 
+    async def generate_text(
+        self,
+        prompt: Any,
+        *,
+        task_name: str = "",
+        max_tokens: int = 800,
+    ) -> str:
+        """通用文本生成（学梗这类需要一段自由文本的场景用），失败返回空串。"""
+
+        return await self._generate(
+            prompt,
+            task_name=(task_name or self.task_name),
+            max_tokens=max_tokens,
+        )
+
     async def seed_interests(
         self,
         *,

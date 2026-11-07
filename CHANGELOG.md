@@ -5,6 +5,28 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.4.0] - 2026-11-08
+
+新增「学梗入库」：从视频里学到梗，整理成梗卡写进麦麦的黑话库（`Jargon` 表），之后聊天里命中这个梗麦麦会自然用上。默认关闭，按需打开。
+
+### 新增
+
+- **`[meme]` 配置节**（默认 `enabled = false`）：`enabled` 总开关、`write_to_db` 是否写库、`auto_learn` 梗类视频自动学、`llm_task` 用哪个模型任务（留空沿用 `[interest].llm_task_name`）、`min_confidence` 置信度门槛（默认 `0.35`）、`reject_taboo_strong` 拒收高敏感梗、`comment_limit` 喂几条热评、`burst_window_seconds` 弹幕分桶窗口（默认 10 秒）、`max_subtitle_chars` 字幕截断长度。
+- **`bili_learn_meme` 工具**（`visibility="visible"` + `core_tool`，对 Planner 直接可见）：参数 `url` 必填、`hint` 可选。读视频的字幕、弹幕爆发点、热评，让模型整理成梗卡（梗名 / 含义 / 用法 / 例句 / 来历 / 时效 / 敏感度 / 置信度），再按配置写进黑话库。
+- **`meme.py` 纯逻辑模块**：`clean_danmaku` 过滤纯情绪弹幕、`danmaku_bursts` 按 N 秒找弹幕峰值、`select_comments` 按「长度 + 点赞 + 解释 / 纠错信号」挑热评、`score_source` 给候选视频打分、`build_meme_prompt` 生成提示词（含「来历只能来自字幕」「例句必须是原句」「材料不足置信度压到 0.3 以下」「敏感梗不许判 none」等硬规则）、`parse_meme_json` 容忍代码块、`normalize_meme` 做入库校验、`compose_meaning` 拼释义、`format_meme_card` 渲染梗卡。
+- **自动学梗**：自动读视频时如果标题命中「什么梗 / 梗指南 / 是什么梗 / 梗科普 / 梗百科 / 梗来源」，且 `[meme].auto_learn` 打开，顺手学一次并把梗卡塞进会话上下文；同一个 BV 只学一次。
+
+### 变更
+
+- `LlmJudge` 新增公开方法 `generate_text(prompt, task_name, max_tokens)`，学梗复用同一条模型链路。
+- `_manifest.json` 的 `capabilities` 新增 `database.query`（写黑话库需要），`version` 升到 `1.4.0`。
+
+### 说明
+
+- 写库保护：同名条目如果不是本插件写的（`created_by` 不是 `AI`，或证据里没有 B 站来源），只提示「保留原记录」、绝不覆盖；本插件写的同名条目只更新 `meaning` 与证据，保留 `count` 使用次数。
+- 宿主没有 `database.query` 能力（老版本麦麦）时，梗卡照样返回，只是不入库、并给出降级说明。
+- 高敏感（`strong`）梗与低于 `min_confidence` 的梗一律不入库，避免污染黑话库。
+
 ## [1.3.2] - 2026-11-08
 
 修「群里贴 `b23.tv` 短链读视频报 `短链解析失败：HTTP 412`」，并补上短链解析的单元测试。

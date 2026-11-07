@@ -8,7 +8,8 @@
 - 自动分享与主动搜索各自独立冷却；
 - 已刷名单：名单内视频不再自动分享；
 - ``bili_read`` 工具：别人贴链接自动 brief 快速读，@ 机器人或说「详细看看」时 full 深度读并抽帧；
-- ``bili_search`` / ``bili_shiwei`` 工具：主动搜索分享、赤石整活视频。
+- ``bili_search`` / ``bili_shiwei`` 工具：主动搜索分享、赤石整活视频；
+- ``bili_learn_meme`` 工具：从视频里学梗，整理成梗卡写进麦麦的黑话库（默认关闭）。
 
 聊天指令已全部移除（平台会拦截 `/` 开头的消息），只通过工具由模型调用。
 宿主能力都通过 ``self.ctx`` 调用，模型由 ``model_config.toml`` 的任务配置决定。
@@ -65,6 +66,16 @@ try:  # 宿主正常按包加载插件
     )
     from .llm_judge import LlmJudge
     from .media import FrameExtractor, cleanup_dir, safe_bvid
+    from meme import (
+        MEME_TITLE_HINTS,
+        build_meme_prompt,
+        clean_danmaku,
+        danmaku_bursts,
+        format_meme_card,
+        normalize_meme,
+        parse_meme_json,
+        select_comments,
+    )
     from .persona import PersonaProvider
     from .store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
     from .textfilter import filter_comments, filter_danmaku
@@ -104,6 +115,16 @@ except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回
     )
     from llm_judge import LlmJudge
     from media import FrameExtractor, cleanup_dir, safe_bvid
+    from meme import (
+        MEME_TITLE_HINTS,
+        build_meme_prompt,
+        clean_danmaku,
+        danmaku_bursts,
+        format_meme_card,
+        normalize_meme,
+        parse_meme_json,
+        select_comments,
+    )
     from persona import PersonaProvider
     from store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
     from textfilter import filter_comments, filter_danmaku
@@ -424,6 +445,31 @@ def format_share_header(video: Video) -> str:
 # ----------------------------------------------------------------------
 
 
+def _to_int(value: Any, default: int = 0) -> int:
+    """把配置值安全转成 int（None / 字符串 / 空值都退回默认值）。"""
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+def _unwrap_db_rows(value: Any) -> Any:
+    """把宿主 db 能力返回的各种壳拆成真正的数据（list / dict / int）。"""
+
+    current = value
+    for _ in range(3):
+        if not isinstance(current, dict):
+            return current
+        if current.get("success") is False:
+            raise RuntimeError(str(current.get("error") or "数据库操作失败"))
+        for key in ("result", "data", "rows", "items"):
+            if key in current:
+                current = current[key]
+                break
+        else:
+            return current
+    return current
+
 class BilibiliInterestSharePlugin(MaiBotPlugin):
     """定时刷 B 站并按兴趣分享视频。"""
 
@@ -461,6 +507,8 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         self._vision_cache: Dict[str, Tuple[float, str]] = {}
         # 白名单里按 user_id 配置的私聊会话：贴链接默认按深度读
         self._private_stream_ids: Set[str] = set()
+        # 学梗：已经学过的视频（bvid），同一个视频不重复学
+        self._meme_learned: Set[str] = set()
 
     # -- 生命周期 ------------------------------------------------------
 
@@ -488,6 +536,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         self._read_cache = VideoCache(ttl_seconds=int(config.read.cache_seconds))
         self._auto_read_seen.clear()
         self._vision_cache.clear()
+        self._meme_learned.clear()
         self._frames = FrameExtractor(
             ffmpeg_path=config.advanced.ffmpeg_path,
             frame_count=config.vision.frame_count,
@@ -2034,6 +2083,319 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             return False
         return True
 
+    @Tool(
+        "bili_learn_meme",
+        description=(
+            "从一个 B 站视频里「学梗」：读它的字幕、弹幕爆发点、热评，让模型整理成一张梗卡"
+            "（梗名、含义、用法、例句、来历、时效、敏感度），需要时写进麦麦的黑话库，"
+            "之后聊天里命中这个梗时麦麦会自然用上。"
+            "用户说「学这个梗」「记住这个梗」「把这个梗入库」并贴了 B 站链接时调用；"
+            "标题像梗指南 / 什么梗 / 梗科普的视频也可以主动学一次。"
+            "一次调用 2~5 秒（要读视频再过一次模型），直接调用即可，不要交给子代理；"
+            "同一句话不用重复调用，梗卡会放在返回的 content 里。"
+        ),
+        parameters=[
+            ToolParameterInfo(
+                name="url",
+                param_type=ToolParamType.STRING,
+                description="B 站视频链接、BV 号或 av 号",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="hint",
+                param_type=ToolParamType.STRING,
+                description="用户点名要学哪个梗（可选）；不知道就留空，让模型自己判断",
+                required=False,
+            ),
+        ],
+        chat_scope="all",
+        visibility="visible",
+        core_tool=True,
+    )
+    async def tool_bili_learn_meme(
+        self, url: str = "", hint: str = "", **kwargs: Any
+    ) -> Dict[str, Any]:
+        target_text = (url or "").strip()
+        if not target_text:
+            for key in ("target", "link", "bv", "text", "query"):
+                value = kwargs.get(key)
+                if isinstance(value, str) and value.strip():
+                    target_text = value.strip()
+                    break
+        if not target_text:
+            return {"success": False, "error": "缺少视频链接或 BV 号"}
+        if not (hint or "").strip():
+            for key in ("term", "word", "meme"):
+                value = kwargs.get(key)
+                if isinstance(value, str) and value.strip():
+                    hint = value.strip()
+                    break
+        try:
+            ok, text = await self.learn_meme(target_text, hint=(hint or "").strip())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 工具里不能抛错
+            logger.warning("bili_learn_meme 失败：%s", exc, exc_info=self._debug_enabled())
+            return {"success": False, "error": "学梗失败：" + str(exc)}
+        if not ok:
+            return {"success": False, "error": text}
+        return {"success": True, "content": text}
+
+    async def learn_meme(self, raw: str, *, hint: str = "") -> Tuple[bool, str]:
+        """读视频 → 让模型整理梗卡 → 需要时写进黑话库。返回 (是否成功, 给模型看的文本)。"""
+
+        try:
+            config = self.config
+        except Exception:  # noqa: BLE001 - 配置还没注入
+            return False, "插件配置还没加载，暂时不能学梗"
+        if not config.plugin.enabled:
+            return False, "插件已停用，没有学梗"
+        if not getattr(config.meme, "enabled", False):
+            return False, "学梗功能没开：到插件配置的「学梗」里打开「启用学梗」再来"
+        try:
+            brief, _content = await asyncio.wait_for(
+                self.read_video(raw, detail="full"), timeout=90.0
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 读失败按普通错误返回
+            return False, "读视频失败：" + str(exc)
+        return await self._learn_from_brief(brief, hint=hint)
+
+    async def _learn_from_brief(
+        self, brief: VideoBrief, *, hint: str = ""
+    ) -> Tuple[bool, str]:
+        """拿已经读到的 VideoBrief 去学梗（自动学梗也走这里，避免重复读视频）。"""
+
+        config = self.config
+        judge = self._judge
+        if judge is None or not getattr(judge, "available", False):
+            return False, "模型不可用（没拿到 llm 能力），没法学梗"
+        try:
+            record, reason = await self._extract_meme(brief, hint=hint)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 学梗失败不该影响别的流程
+            logger.warning("学梗失败：%s", exc, exc_info=self._debug_enabled())
+            return False, "学梗失败：" + str(exc)
+        if record is None:
+            return False, reason
+        saved = ""
+        if getattr(config.meme, "write_to_db", True):
+            try:
+                saved = await self._save_meme(record, brief)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 写库失败也要把梗卡给出去
+                logger.warning("写黑话库失败：%s", exc)
+                saved = "（写黑话库失败，只给你梗卡：" + str(exc) + "）"
+        return True, format_meme_card(
+            record, video_title=brief.title, url=brief.url, saved=saved
+        )
+
+    async def _extract_meme(
+        self, brief: VideoBrief, *, hint: str = ""
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        """把视频材料交给自己模型整理成梗卡；返回 (梗卡, 失败原因)。"""
+
+        meme_cfg = self.config.meme
+        window = _to_int(getattr(meme_cfg, "burst_window_seconds", 10), 10)
+        bursts: List[Dict[str, Any]] = []
+        for burst in danmaku_bursts(
+            getattr(brief, "danmaku_timeline", None) or [],
+            window_seconds=window,
+            top=4,
+            samples=6,
+        ):
+            samples = clean_danmaku(burst.get("samples") or [], limit=4)
+            if not samples:
+                continue
+            item = dict(burst)
+            item["samples"] = samples
+            bursts.append(item)
+        comment_limit = _to_int(getattr(meme_cfg, "comment_limit", 14), 14)
+        comments: List[Tuple[str, str, int]] = []
+        if comment_limit > 0:
+            comments = select_comments(
+                getattr(brief, "comments", None) or [], limit=comment_limit
+            )
+        stats = getattr(brief, "stats", None) or {}
+        subtitle_chars = _to_int(getattr(meme_cfg, "max_subtitle_chars", 6000), 6000)
+        prompt = build_meme_prompt(
+            title=brief.title,
+            owner=brief.owner,
+            partition=brief.partition,
+            duration=brief.duration,
+            tags=brief.tags,
+            play=stats.get("play", 0),
+            danmaku=stats.get("danmaku", 0),
+            description=brief.description,
+            subtitle=brief.subtitle,
+            bursts=bursts,
+            comments=comments,
+            term_hint=hint,
+            max_subtitle_chars=subtitle_chars,
+        )
+        judge = self._judge
+        if judge is None or not getattr(judge, "available", False):
+            return None, "模型不可用（没拿到 llm 能力），没法学梗"
+        task_name = str(getattr(meme_cfg, "llm_task", "") or "").strip()
+        if not task_name:
+            task_name = str(getattr(self.config.interest, "llm_task_name", "") or "").strip()
+        text = await judge.generate_text(prompt, task_name=task_name, max_tokens=900)
+        if not str(text or "").strip():
+            return None, (
+                "模型没有返回内容：检查「学梗 → 模型任务名」是否配错，或者模型超时了"
+            )
+        data = parse_meme_json(text)
+        if data is None:
+            return None, "模型返回的不是 JSON，没能整理出梗卡（可以再试一次）"
+        return normalize_meme(
+            data,
+            min_confidence=float(getattr(meme_cfg, "min_confidence", 0.35) or 0.0),
+            reject_taboo_strong=bool(getattr(meme_cfg, "reject_taboo_strong", True)),
+        )
+
+    async def _save_meme(self, record: Dict[str, Any], brief: VideoBrief) -> str:
+        """把梗卡写进麦麦的黑话库（Jargon 表）；返回一句给模型看的结果说明。"""
+
+        content = str(record.get("content") or "").strip()
+        if not content:
+            return "（梗名是空的，没有写入黑话库）"
+        meaning = str(record.get("meaning_text") or record.get("meaning") or "").strip()
+        bvid = str(getattr(brief, "bvid", "") or "") or str(getattr(brief, "url", "") or "")
+        evidence = json.dumps(
+            [[{"platform": "bilibili", "message_id": bvid}]], ensure_ascii=False
+        )
+        existing = await self._db_rows("get", filters={"content": content}, limit=1)
+        rows: List[Any] = []
+        if isinstance(existing, list):
+            rows = existing
+        elif isinstance(existing, dict):
+            rows = [existing]
+        first = rows[0] if rows and isinstance(rows[0], dict) else None
+        if first is not None:
+            creator = str(first.get("created_by") or "").strip()
+            old_evidence = str(first.get("evidence_messages") or "")
+            if creator.upper() != "AI" or '"bilibili"' not in old_evidence:
+                return "（⚠️ 黑话库里已有同名梗，而且不是本插件写的，已保留原记录，没有覆盖）"
+            old_id = first.get("id")
+            if old_id is None:
+                return "（⚠️ 黑话库里已有同名梗，但读不到它的 id，没有覆盖）"
+            result = await self._db_rows(
+                "update",
+                data={"meaning": meaning, "evidence_messages": evidence},
+                filters={"id": old_id},
+            )
+            if result is None or result is False or result == 0:
+                return "（数据库没有确认写入成功）"
+            return "（已更新黑话库里这个梗的释义）"
+        payload = {
+            "content": content,
+            "meaning": meaning,
+            "evidence_messages": evidence,
+            "session_id_dict": "{}",
+            "count": 0,
+            "is_jargon": True,
+            "is_complete": True,
+            "is_global": True,
+            "last_inference_count": 0,
+            "created_by": "AI",
+        }
+        result = await self._db_rows("create", data=payload)
+        if result is None or result is False or result == 0:
+            return "（数据库没有确认写入成功）"
+        return "（已写入黑话库，之后聊天里命中这个梗会自然用上）"
+
+    async def _db_rows(
+        self,
+        query_type: str,
+        *,
+        data: Optional[Dict[str, Any]] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+    ) -> Any:
+        """调宿主的数据库能力（Jargon 表就是麦麦的黑话库）。"""
+
+        try:
+            db = getattr(self.ctx, "db", None)
+        except Exception:  # noqa: BLE001 - ctx 还没注入
+            db = None
+        if db is None:
+            raise RuntimeError("当前麦麦版本没有 db 能力（需要 database.query）")
+        result = await db.query(
+            "Jargon",
+            query_type=query_type,
+            data=data,
+            filters=filters,
+            limit=limit,
+        )
+        return _unwrap_db_rows(result)
+
+    def _should_learn_meme(self, brief: VideoBrief) -> bool:
+        """自动学梗的门槛：开关打开 + 标题像梗类视频 + 这个视频没学过。"""
+
+        try:
+            meme_cfg = self.config.meme
+        except Exception:  # noqa: BLE001 - 配置没注入
+            return False
+        if not getattr(meme_cfg, "enabled", False):
+            return False
+        if not getattr(meme_cfg, "auto_learn", True):
+            return False
+        bvid = str(getattr(brief, "bvid", "") or "")
+        if bvid and bvid in self._meme_learned:
+            return False
+        title = str(getattr(brief, "title", "") or "")
+        return any(hint in title for hint in MEME_TITLE_HINTS)
+
+    async def _auto_learn_meme(self, brief: VideoBrief, stream_id: str) -> None:
+        """梗类视频被自动读到时，顺手学一次（只写库，失败只留日志）。"""
+
+        bvid = str(getattr(brief, "bvid", "") or "")
+        if bvid:
+            self._meme_learned.add(bvid)
+        try:
+            ok, text = await asyncio.wait_for(
+                self._learn_from_brief(brief), timeout=120.0
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 自动学梗失败只留日志
+            logger.info("自动学梗失败：%s", exc)
+            return
+        if not ok:
+            logger.info("自动学梗没有入库：%s", text)
+            return
+        logger.info("自动学梗成功：%s", (text or "").splitlines()[0] if text else "")
+        await self._append_note(
+            stream_id,
+            "（顺手从上面这个视频里学到一个梗，已经记进黑话库，聊天里可以自然用：" + (text or "") + "）",
+            visible="学到一个梗",
+        )
+
+    async def _append_note(self, stream_id: str, text: str, *, visible: str = "") -> bool:
+        """往会话上下文里塞一段插件自己产生的文本。"""
+
+        try:
+            maisaka = getattr(self.ctx, "maisaka", None)
+        except Exception:  # noqa: BLE001 - 上下文还没注入
+            return False
+        context = getattr(maisaka, "context", None)
+        if context is None:
+            return False
+        try:
+            await context.append(
+                stream_id=stream_id,
+                segments=[{"type": "text", "content": text}],
+                visible_text=visible or "插件说明",
+                source_kind="plugin:bilibili_interest_share",
+            )
+        except Exception as exc:  # noqa: BLE001 - 写上下文失败不影响主流程
+            logger.debug("写入插件上下文失败：%s", exc)
+            return False
+        return True
+
     async def _stream_scope_for_message(self, stream_id: str, message: Any) -> str:
         """判断消息所在会话是不是白名单里的启用会话。
 
@@ -2157,6 +2519,8 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                     brief.title,
                     brief.bvid,
                 )
+                if self._should_learn_meme(brief):
+                    await self._auto_learn_meme(brief, stream_id)
         if appended:
             logger.debug("会话 %s 本轮自动读取 %s 个视频", stream_id, appended)
 

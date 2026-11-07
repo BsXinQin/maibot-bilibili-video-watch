@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.3.2-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.4.0-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v1.3.2** · 全部配置项已中文化 · 手动填 Cookie 登录 · 读视频分 brief / full 两档
+> 当前版本 **v1.4.0** · 全部配置项已中文化 · 手动填 Cookie 登录 · 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -34,6 +34,7 @@
   - [`[share]` 分享格式](#share-分享格式)
   - [`[shiwei]` 赤石视频](#shiwei-赤石视频)
   - [`[read]` 读视频](#read-读视频)
+  - [`[meme]` 学梗](#meme-学梗)
   - [`[advanced]` 运行参数](#advanced-运行参数)
   - [`[[streams]]` 白名单聊天流](#streams-白名单聊天流)
 - [工具](#工具)
@@ -64,6 +65,7 @@
 | **主动搜索** | 麦麦可以自己调 `bili_search` 工具按关键词搜一条并分享，独立冷却（默认 5 分钟），不影响自动频率 |
 | **赤石视频** | 麦麦可以调 `bili_shiwei` 工具抓一个抽象整活视频，只发标题+链接，不带介绍 |
 | **能读视频** | `bili_read` 工具 + 白名单会话里**贴链接自动读**（brief：简介、分P、字幕节选、热评、弹幕，不调视觉模型）；有人 @ 麦麦或说「详细看看」时自动切 full：字幕时间轴、弹幕时间线、更多热评，并**抽帧看画面**；私聊里贴链接默认就走 full |
+| **能学梗** | `bili_learn_meme` 工具：读视频的字幕、**10 秒弹幕爆发点**、热评，让模型整理成一张梗卡（梗名 / 含义 / 用法 / 例句 / 来历 / 时效 / 敏感度），写进麦麦的**黑话库**（`Jargon` 表），之后聊天里命中这个梗它会自然用上；标题像「什么梗 / 梗指南 / 梗科普」的视频被自动读到时也会顺手学一次（默认关闭） |
 | **人设语气** | 推荐语与介绍按 MaiBot 的**麦麦人设**口吻生成，可覆盖、可关 |
 | **全中文配置** | 每个配置项都有中文名和中文说明，WebUI 表单直接看得懂 |
 
@@ -157,7 +159,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.3.2"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.4.0"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -397,6 +399,32 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 
 同一条视频在 `cache_seconds` 内被重复读到会直接走缓存，不会反复打 B 站接口；缓存按读取参数分键，brief 与 full 各存一份。短链（`b23.tv` / `bili2233.cn`）会先跟随跳转再解析。
 
+### `[meme]` 学梗
+
+从视频里学梗：读字幕 + 弹幕爆发点 + 热评，让模型整理成一张梗卡，需要时写进麦麦的黑话库（`Jargon` 表）。
+
+写库后的效果：麦麦聊天时如果群友提到这个梗，宿主的黑话匹配会把释义塞进上下文，它就能自然用上，不需要你教第二遍。
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `false` | 是否启用学梗（默认关闭；关着时 `bili_learn_meme` 工具会回「学梗功能没开」） |
+| `write_to_db` | `true` | 学到梗是否写进黑话库；关掉只把梗卡返回给模型，不改数据库 |
+| `auto_learn` | `true` | 自动读视频时，标题像梗类视频（`什么梗` / `梗指南` / `梗科普` 等）就顺手学一次；同一个 BV 只学一次 |
+| `llm_task` | `""` | 学梗用哪个模型任务；留空用 `[interest].llm_task_name` |
+| `min_confidence` | `0.35` | 模型给出的置信度低于这个值就丢弃（`0`~`1`），避免把瞎猜的梗写进库 |
+| `reject_taboo_strong` | `true` | 判定为高敏感（`strong`）的梗不入库，防止把地域 / 民族 / 性别之类的攻击性词条写进去 |
+| `comment_limit` | `14` | 学梗时挑几条热评喂给模型（`0`~`30`） |
+| `burst_window_seconds` | `10` | 弹幕峰值按多少秒分桶（`5`~`60`）；弹幕在同一段里炸开的地方通常就是梗 |
+| `max_subtitle_chars` | `6000` | 字幕最多截多少字进提示词（`500`~`20000`） |
+
+写库有几条保护：
+
+- **同名不覆盖手写梗**：黑话库里已有的同名条目如果不是本插件写的（`created_by` 不是 `AI`，或证据里没有 B 站来源），只提示「保留原记录」，绝不改它。
+- **本插件写的会更新释义**：同名条目是本插件写的，只更新 `meaning` 与证据，**保留 `count` 使用次数**。
+- **没有 `database.query` 能力时降级**：老版本麦麦没有数据库能力，梗卡照样返回，只是不入库。
+
+一次学梗要多花一次模型请求（提示词约 800~1500 字，字幕长的视频更多），所以默认关着，按需打开。
+
 ### `[advanced]` 运行参数
 
 | 键 | 默认 | 说明 |
@@ -452,8 +480,9 @@ max_share_per_round = 0           # 该流每轮最多几个，0 = 用 [schedule
 | `bili_read` | `url` 必填；`detail` 可选（`brief` / `full`） | 读一个 B 站视频：标题、UP、简介、分P、字幕、热评、弹幕；`full` 另带字幕时间轴、弹幕时间线与画面描述 |
 | `bili_search` | `query` 必填；`count` 可选 | 按关键词搜 B 站并挑一条分享到当前会话；受 `search_cooldown_seconds` 冷却，**只在白名单会话里生效** |
 | `bili_shiwei` | 无 | 抓一个抽象整活视频（赤石），只发标题+链接；受 `[shiwei].cooldown_seconds` 冷却，**只在白名单会话里生效** |
+| `bili_learn_meme` | `url` 必填；`hint` 可选 | 从视频里学梗并写进麦麦黑话库；`hint` 是用户点名要学的梗。受 `[meme].enabled` 控制，默认关闭 |
 
-三个工具都对 Planner 直接可见（`core_tool` + `visibility="visible"`），不需要先 `tool_search`，也不用派子代理空转等待。
+四个工具都对 Planner 直接可见（`core_tool` + `visibility="visible"`），不需要先 `tool_search`，也不用派子代理空转等待。
 
 ---
 
@@ -614,7 +643,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 - **排行榜接口**风控较严，未配 Cookie 时基本拿不到数据，所以默认关闭。
 - **抽帧依赖 ffmpeg**：都没有时自动跳过识图，其余流程正常。
 - **识图需要支持视觉的模型**：自动分享入选视频与 full 读都会调它，默认 `vlm` 任务；没有就把 `[vision].task_name` 改成支持图片的模型任务名，或关掉 `[vision].enabled`（full 读仍可用，只是没有画面描述）。
-- **没有聊天指令**：平台会拦截 `/` 开头的消息，插件只提供 `bili_read` / `bili_search` / `bili_shiwei` 三个工具，由麦麦自己决定什么时候调用。
+- **没有聊天指令**：平台会拦截 `/` 开头的消息，插件只提供 `bili_read` / `bili_search` / `bili_shiwei` / `bili_learn_meme` 四个工具，由麦麦自己决定什么时候调用。
 - **LLM 判断有成本**：`llm_max_candidates` 控制每轮最多判断几个，默认 5。
 - **人设依赖宿主配置**：通过 `config.get` 读取；读不到时退回中性语气，不影响分享。
 - 分享的是**文本卡片 + 链接**，不会把视频文件发到群里。
@@ -625,6 +654,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v1.4.0**：新增**学梗入库**（`[meme]` 配置节 + `bili_learn_meme` 工具，默认关闭）——读视频的字幕、10 秒弹幕爆发点与热评，让模型整理成梗卡写进麦麦黑话库（`Jargon` 表）；标题像「什么梗 / 梗指南 / 梗科普」的视频被自动读到时会顺手学一次，同一个 BV 只学一次。防污染：同名手写梗绝不覆盖，本插件写的只更新释义并保留使用次数，高敏感（`strong`）与低置信度一律不入库；宿主缺少 `database.query` 能力时只返回梗卡、不写库。
 - **v1.3.2**：修「贴 `b23.tv` 短链读视频报 `短链解析失败：HTTP 412`」。短链解析改成手动跟随跳转、只读 `Location` 头，**不再去请求跳转后的视频页**——那个 HTML 页面对机房 IP 常被 B 站 WAF 拦成 412（短链本身没坏，坏的是那次多余的页面请求）；短链服务自身撞 412 时会先补一次 buvid Cookie 再试，仍失败则报出可操作提示。
 - **v1.3.1**：修「白名单没覆盖的群里贴链接不自动读也没任何提示」。新增 `[read].auto_read_all_streams`（默认关）：打开后机器人所在的任何会话有人贴 B 站链接都会自动读，不再要求先写进 `[[streams]]`；关着时如果链接落在白名单外的会话，日志会打一条 INFO 说明是白名单没命中（以前是 debug，看不见）。自动读失败（短链解析失败、412 风控、B 站接口报错等）从 debug 改成 WARNING，报错原因直接进日志。
 - **v1.3.0**：清理与修复。删掉「分享格式」里实际不起作用的七个选项（`casual_mode` / `intro_enabled` / `intro_max_chars` / `send_as_parts` / `part_delay_seconds` / `narrative_enabled` / `narrative_max_chars`），分享固定为一条「随口一句 + 【标题】链接」；删掉整个「重发」模块（`[reshare]` 配置、钩子里的重发逻辑、历史记录模糊匹配）。修好「别人在群里贴 B 站链接麦麦不自动看」：自动读改挂 `chat.receive.after_process`（原来挂在 `before_process`，那时消息还没 `process()`，取不到正文），并支持 `data` 为字符串的文本段、JSON 结构化段与平台卡片；白名单判定也接受「消息里的 group_id / user_id 命中 `[[streams]]`」，新群第一条消息就能生效。

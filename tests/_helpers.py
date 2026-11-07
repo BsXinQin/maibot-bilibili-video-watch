@@ -186,6 +186,52 @@ class FakeConfig:
         return self.values.get(key, default)
 
 
+class FakeDb:
+    """假的数据库能力（``ctx.db``）：按 query_type 返回预设结果，并记录调用。"""
+
+    def __init__(
+        self,
+        *,
+        rows: Optional[List[Dict[str, Any]]] = None,
+        create_result: Any = 1,
+        update_result: Any = 1,
+        fail: bool = False,
+    ) -> None:
+        self.rows = rows or []
+        self.create_result = create_result
+        self.update_result = update_result
+        self.fail = fail
+        self.calls: List[Dict[str, Any]] = []
+
+    async def query(
+        self,
+        model_name: str,
+        query_type: str = "get",
+        data: Optional[Dict[str, Any]] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        order_by: Optional[List[str]] = None,
+        limit: Optional[int] = None,
+        single_result: bool = False,
+    ) -> Any:
+        self.calls.append(
+            {
+                "model_name": model_name,
+                "query_type": query_type,
+                "data": data,
+                "filters": filters,
+                "limit": limit,
+            }
+        )
+        if self.fail:
+            return {"success": False, "error": "数据库炸了"}
+        if query_type == "get":
+            return [dict(item) for item in self.rows]
+        if query_type == "create":
+            return {"success": True, "result": self.create_result}
+        if query_type == "update":
+            return {"success": True, "result": self.update_result}
+        return {"success": True, "result": None}
+
 class FakeCtx:
     def __init__(
         self,
@@ -198,6 +244,7 @@ class FakeCtx:
         fail_streams: Optional[Any] = None,
         llm: Optional[FakeLlm] = None,
         config_values: Optional[Dict[str, Any]] = None,
+        db: Optional[FakeDb] = None,
     ) -> None:
         self.paths = FakePaths(data_dir)
         self.logger = FakeLogger()
@@ -210,6 +257,7 @@ class FakeCtx:
         self.message = FakeMessage(messages)
         self.llm = llm if llm is not None else FakeLlm()
         self.config = FakeConfig(config_values)
+        self.db = db
         self.capability_calls: List[Dict[str, Any]] = []
 
     async def call_capability(self, capability: str, timeout_ms: Any = None, **kwargs: Any) -> Any:
