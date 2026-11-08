@@ -5,7 +5,19 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.7.0] - 2026-11-08
+
+### 移除
+
+- 「赤石视频」整块功能：`bili_shiwei` 工具、`[shiwei]` 配置节、`share_shiwei()`、`COOLDOWN_SHIWEI` 常量、`tools/live_check.py` 的 `--shiwei` 参数，以及 README 里对应的说明。
+- `_send_parts()` 不再需要 `kind` 参数（原先只有赤石路径会传 `"shiwei"`），分享文案一律取自 `narrative`。想整活请让麦麦自己用 `bili_search` 搜关键词。
+
+### 升级说明
+
+装过 1.6.6 及更早版本的，直接覆盖安装即可：配置里残留的 `[shiwei]` 节会被配置模型忽略（多余字段不报错），也可以手动删掉那几行。
+
 ## [1.6.6] - 2026-11-08
+
 
 ### 新增
 

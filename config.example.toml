@@ -10,7 +10,7 @@
 # 启用插件 —— 是否启用沁の刷B站视频
 enabled = true
 # 配置版本
-config_version = "1.6.6"
+config_version = "1.7.0"
 
 [schedule]
 # 刷取间隔（分钟） —— 每隔多少分钟自动刷一次 B 站：1=每分钟，60=每小时，1440=每天（可调范围 1 分钟 ~ 24 小时）
@@ -269,26 +269,6 @@ verify_send = true
 card_auto_disable = true
 # 超时（秒） —— 请求 OneBot 接口的超时秒数
 timeout_seconds = 8.0
-
-[shiwei]
-# 启用赤石视频 —— 是否启用赤石视频工具（由麦麦在聊天里自行调用）
-enabled = true
-# 冷却（秒） —— 该工具的冷却秒数（默认 10 分钟）
-cooldown_seconds = 600
-# 一次最多分享
-max_share = 1
-# 搜索关键词
-keywords = ["抽象", "整活", "鬼畜", "离谱", "翻车", "整蛊", "土味", "迷惑行为", "逆天", "难绷", "典中典", "社死", "搞笑"]
-# 每次搜索关键词数 —— 每次用几个关键词搜索
-search_keywords_per_round = 2
-# 最低播放量
-min_play = 20000
-# 最短时长（秒）
-min_duration_seconds = 10
-# 最长时长（秒）
-max_duration_seconds = 900
-# 额外排除关键词 —— 石味视频额外排除的关键词
-block_keywords = ["官方", "预告", "发布会", "宣传片"]
 
 [read]
 # 启用读视频 —— 启用 bili_read 工具（麦麦能真正读到视频的简介、分P、字幕、热评、弹幕）

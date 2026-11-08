@@ -8,7 +8,7 @@
 - 自动分享与主动搜索各自独立冷却；
 - 已刷名单：名单内视频不再自动分享；
 - ``bili_read`` 工具：别人贴链接自动 brief 快速读，@ 机器人或说「详细看看」时 full 深度读并抽帧；
-- ``bili_search`` / ``bili_shiwei`` 工具：主动搜索分享、赤石整活视频；
+- ``bili_search`` 工具：主动搜索分享；
 - ``bili_learn_meme`` 工具：从视频里学梗，整理成梗卡写进麦麦的黑话库（默认关闭）。
 
 聊天指令已全部移除（平台会拦截 `/` 开头的消息），只通过工具由模型调用。
@@ -85,7 +85,7 @@ try:  # 宿主正常按包加载插件
     from .share_card import fill_miniapp_payload
     from .share_card import miniapp_variants
     from .share_card import send_json_card, send_json_card_ex, send_tuwen_ark
-    from .store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
+    from .store import COOLDOWN_ACTIVE_SEARCH, SeenStore
     from .textfilter import filter_comments, filter_danmaku
 except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回同级导入
     import os as _os
@@ -139,7 +139,7 @@ except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回
     from share_card import fill_miniapp_payload
     from share_card import miniapp_variants
     from share_card import send_json_card, send_json_card_ex, send_tuwen_ark
-    from store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
+    from store import COOLDOWN_ACTIVE_SEARCH, SeenStore
     from textfilter import filter_comments, filter_danmaku
 
 logger = logging.getLogger("plugin.bilibili_interest_share")
@@ -980,13 +980,11 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 stream_id,
                 result.video,
                 narrative_text,
-                kind="auto",
             )
             if sent:
                 self._store.mark_shared(
                     result.video,
                     narrative=narrative_text,
-                    kind="auto",
                     stream_id=stream_id,
                 )
                 shared.append(result.video.bvid)
@@ -2204,16 +2202,11 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         stream_id: str,
         video: Video,
         narrative: str,
-        *,
-        kind: str = "auto",
     ) -> bool:
-        """发送分享：按配置选文字 / 封面图文 / 小程序卡片，失败逐级回退。
-
-        赤石（kind="shiwei"）不带文案，只发标题链接。
-        """
+        """发送分享：按配置选文字 / 封面图文 / 小程序卡片，失败逐级回退。"""
 
         config = self.config
-        line = "" if kind == "shiwei" else (narrative or "").strip()
+        line = (narrative or "").strip()
         if line and not self._roll_casual():
             logger.info("随口一句按概率跳过（[share].casual_chance），这次只发标题链接：%s", video.bvid)
             line = ""
@@ -2314,7 +2307,6 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                     stream_id,
                     video,
                     str(cached.get("narrative") or cached.get("summary") or ""),
-                    kind="search",
                 )
                 shared.append(video.bvid)
                 continue
@@ -2336,12 +2328,10 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 stream_id,
                 video,
                 narrative_text,
-                kind="search",
             ):
                 self._store.mark_shared(
                     video,
                     narrative=narrative_text,
-                    kind="search",
                     stream_id=stream_id,
                 )
                 shared.append(video.bvid)
@@ -2350,77 +2340,6 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             self._store.mark_cooldown(COOLDOWN_ACTIVE_SEARCH)
             self._store.save()
         return {"ok": bool(shared), "shared": shared, "query": query}
-
-    async def share_shiwei(self, stream_id: str) -> Dict[str, Any]:
-        """``/赤石视频``：抓取并分享抽象整活类视频，不带总结和看点。"""
-
-        config = self.config
-        if not config.plugin.enabled:
-            return {"ok": False, "reason": "disabled"}
-        if not config.shiwei.enabled:
-            return {"ok": False, "reason": "disabled"}
-        if self._client is None or self._store is None:
-            return {"ok": False, "reason": "not_loaded"}
-        # 赤石视频同样只发给白名单会话
-        allowed = await self._ensure_allowed_streams()
-        if stream_id not in allowed:
-            logger.debug("会话 %s 不在白名单，忽略赤石视频请求", stream_id)
-            return {"ok": False, "reason": "not_allowed"}
-
-        remaining = self._store.cooldown_remaining(COOLDOWN_SHIWEI, config.shiwei.cooldown_seconds)
-        if remaining > 0:
-            return {"ok": False, "reason": "cooldown", "remaining": int(remaining)}
-
-        keywords = [item for item in config.shiwei.keywords if item][
-            : max(1, int(config.shiwei.search_keywords_per_round))
-        ]
-        videos: List[Video] = []
-        for keyword in keywords:
-            try:
-                videos.extend(await self._client.fetch_search(keyword, page=1))
-            except BilibiliError as exc:
-                logger.debug("赤石搜索「%s」失败：%s", keyword, exc)
-            if config.sources.search_delay_seconds > 0:
-                await asyncio.sleep(float(config.sources.search_delay_seconds))
-        if not videos:
-            return {"ok": False, "reason": "no_candidates"}
-
-        blocked = [item.lower() for item in config.shiwei.block_keywords or []]
-        # 赤石路径也套一层全局屏蔽词，避免把广告/带货/官方预告当整活发出去
-        blocked.extend(item.lower() for item in config.filter.block_keywords or [])
-        if config.filter.exclude_official:
-            blocked.extend(item.lower() for item in config.filter.official_keywords or [])
-        blocked_up = [item.lower() for item in config.filter.block_up_names or []]
-        shiwei_words = [item for item in config.shiwei.keywords if item]
-        scored: List[Tuple[float, Video]] = []
-        for video in merge_videos([videos]):
-            haystack = f"{video.title} {video.description} {getattr(video, 'tags', '')}".lower()
-            if any(token and token in haystack for token in blocked):
-                continue
-            if blocked_up and any(name and name in str(getattr(video, "owner", "")).lower() for name in blocked_up):
-                continue
-            if video.play < config.shiwei.min_play:
-                continue
-            if video.duration < config.shiwei.min_duration_seconds:
-                continue
-            if video.duration > config.shiwei.max_duration_seconds:
-                continue
-            hits = sum(1 for word in shiwei_words if word.lower() in haystack)
-            if not hits:
-                continue
-            scored.append((hits * 2.0 + math.log10(1 + video.play) * 0.3, video))
-        if not scored:
-            return {"ok": False, "reason": "no_candidates"}
-        scored.sort(key=lambda item: -item[0])
-        shared: List[str] = []
-        for _score, video in scored[: max(1, int(config.shiwei.max_share))]:
-            if await self._send_parts(stream_id, video, "", kind="shiwei"):
-                self._store.mark_shared(video, kind="shiwei", stream_id=stream_id)
-                shared.append(video.bvid)
-        if shared:
-            self._store.mark_cooldown(COOLDOWN_SHIWEI)
-            self._store.save()
-        return {"ok": bool(shared), "shared": shared}
 
     # -- 读视频（bili_read 工具 / 贴链接自动读） ------------------------
 
@@ -3092,7 +3011,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             logger.debug("自动读视频失败：%s", exc)
         return None
 
-    # -- 工具：主动搜索 / 赤石（聊天指令会被平台拦截，改由模型调用工具） --
+    # -- 工具：主动搜索（聊天指令会被平台拦截，改由模型调用工具） --------
 
     def _stream_from_tool_kwargs(self, kwargs: Dict[str, Any]) -> str:
         """工具调用里取当前聊天流：优先顶层 stream_id，其次宿主的 session 对象。"""
@@ -3164,39 +3083,6 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             "fetch_failed": f"搜索失败：{result.get('error') or ''}",
         }
         return {"success": False, "error": messages.get(reason, f"主动搜索没有成功：{reason}")}
-
-    @Tool(
-        "bili_shiwei",
-        description=(
-            "抓一个抽象整活类（「赤石」）B 站视频，原样分享到当前聊天，不带总结。"
-            "用户想看点离谱、整活的视频时用它；工具会自己完成搜索和发送，"
-            "不需要再调用 send。只能在插件白名单聊天流里使用。"
-        ),
-        chat_scope="all",
-        visibility="visible",
-        core_tool=True,
-    )
-    async def tool_bili_shiwei(self, **kwargs: Any) -> Dict[str, Any]:
-        stream_id = self._stream_from_tool_kwargs(kwargs)
-        if not stream_id:
-            return {"success": False, "error": "需要在聊天里调用这个工具"}
-        result = await self.share_shiwei(stream_id)
-        if result.get("ok"):
-            return {
-                "success": True,
-                "content": "赤石视频已送达",
-                "shared": list(result.get("shared") or []),
-            }
-        reason = str(result.get("reason") or "")
-        messages = {
-            "not_allowed": "这个会话不在插件白名单里，不能主动分享",
-            "cooldown": f"赤石视频还在冷却中，{int(result.get('remaining') or 0)} 秒后再试",
-            "no_candidates": "这次没捞到合适的赤石视频",
-        }
-        return {
-            "success": False,
-            "error": messages.get(reason, f"这次没捞到合适的赤石视频（{reason}）"),
-        }
 
     # -- 杂项 ----------------------------------------------------------
 

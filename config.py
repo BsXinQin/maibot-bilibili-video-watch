@@ -16,7 +16,6 @@
 - ``[scoring]``：打分权重与入选阈值
 - ``[persona]``：分享文案使用 MaiBot 配置的人设语气
 - ``[share]``：分享格式（随口一句 + 标题链接）
-- ``[shiwei]``：赤石视频工具专用配置
 - ``[advanced]``：数据目录、超时、去重等运行参数
 - ``[read]``：读视频（贴链接自动读、深度读、抽帧看画面）
 - ``[meme]``：学梗（把视频里的梗整理成梗卡写进麦麦黑话库）
@@ -43,7 +42,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.6.6",
+        default="1.7.0",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -789,72 +788,6 @@ class CardConfig(PluginConfigBase):
     )
 
 
-class ShiweiConfig(PluginConfigBase):
-    """``/赤石视频``：石味（抽象整活）视频。"""
-
-    __ui_label__ = "赤石视频"
-    __ui_icon__ = "flame"
-    __ui_order__ = 13
-
-    enabled: bool = Field(
-        default=True,
-        description="是否启用赤石视频工具（由麦麦自己决定什么时候整活）",
-        json_schema_extra={"label": "启用赤石视频"},
-    )
-    cooldown_seconds: int = Field(
-        default=600,
-        ge=0,
-        le=86400,
-        description="该工具的冷却秒数（默认 10 分钟）",
-        json_schema_extra={"label": "冷却（秒）"},
-    )
-    max_share: int = Field(
-        default=1,
-        ge=1,
-        le=5,
-        description="一次最多分享几个石味视频",
-        json_schema_extra={"label": "一次最多分享"},
-    )
-    keywords: List[str] = Field(
-        default_factory=lambda: [
-            "抽象", "整活", "鬼畜", "离谱", "翻车", "整蛊", "土味", "迷惑行为",
-            "逆天", "难绷", "典中典", "社死", "搞笑",
-        ],
-        description="石味视频的搜索关键词",
-        json_schema_extra={"label": "搜索关键词"},
-    )
-    search_keywords_per_round: int = Field(
-        default=2,
-        ge=1,
-        le=6,
-        description="每次用几个关键词搜索",
-        json_schema_extra={"label": "每次搜索关键词数"},
-    )
-    min_play: int = Field(
-        default=20000,
-        ge=0,
-        description="石味视频的最低播放量",
-        json_schema_extra={"label": "最低播放量"},
-    )
-    min_duration_seconds: int = Field(
-        default=10,
-        ge=0,
-        description="最短时长（秒）",
-        json_schema_extra={"label": "最短时长（秒）"},
-    )
-    max_duration_seconds: int = Field(
-        default=900,
-        ge=60,
-        description="最长时长（秒）",
-        json_schema_extra={"label": "最长时长（秒）"},
-    )
-    block_keywords: List[str] = Field(
-        default_factory=lambda: ["官方", "预告", "发布会", "宣传片"],
-        description="石味视频额外排除的关键词",
-        json_schema_extra={"label": "额外排除关键词"},
-    )
-
-
 class AdvancedConfig(PluginConfigBase):
     """运行参数。"""
 
@@ -1227,10 +1160,6 @@ class BilibiliInterestShareConfig(PluginConfigBase):
     card: CardConfig = Field(
         default_factory=CardConfig,
         description="小程序卡片直发（分享形式选 card 时才用；直连 QQ 客户端的 OneBot HTTP）",
-    )
-    shiwei: ShiweiConfig = Field(
-        default_factory=ShiweiConfig,
-        description="赤石视频工具（抽象整活类视频分享）",
     )
     advanced: AdvancedConfig = Field(
         default_factory=AdvancedConfig,

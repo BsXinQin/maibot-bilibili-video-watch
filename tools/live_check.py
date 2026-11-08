@@ -112,7 +112,6 @@ async def main() -> int:
     parser.add_argument("--danmaku", action="store_true", help="抓取弹幕与热门评论并打印样本")
     parser.add_argument("--vision", action="store_true", help="真实下载视频并抽帧（需 ffmpeg）")
     parser.add_argument("--llm", action="store_true", help="启用 LLM 判断（需要 MaiBot 宿主）")
-    parser.add_argument("--shiwei", action="store_true", help="改为验证 /赤石视频（抽象整活类）")
     args = parser.parse_args()
 
     module = load_plugin_module()
@@ -153,22 +152,15 @@ async def main() -> int:
         try:
             if args.danmaku:
                 await _dump_detail_samples(plugin)
-            if args.shiwei:
-                summary = await plugin.share_shiwei("live-check")
-                summary.setdefault("fetched", 0)
-            else:
-                summary = await plugin.run_round(reason="live-check", manual=True)
+            summary = await plugin.run_round(reason="live-check", manual=True)
         finally:
             await plugin.on_unload()
 
         print("=" * 60)
         shared = summary.get("shared") or 0
         shared_count = len(shared) if isinstance(shared, (list, tuple)) else int(shared)
-        if args.shiwei:
-            print(f"赤石视频：分享 {shared_count} 个")
-        else:
-            print(f"候选：{summary.get('fetched', 0)} 个｜分享：{shared_count} 个")
-            print(f"搜索词：{'、'.join(summary.get('keywords') or []) or '（未搜索）'}")
+        print(f"候选：{summary.get('fetched', 0)} 个｜分享：{shared_count} 个")
+        print(f"搜索词：{'、'.join(summary.get('keywords') or []) or '（未搜索）'}")
         print("=" * 60)
         if not ctx.send.messages:
             print("没有挑选出合适的视频（可以放宽 filter/scoring 配置）")

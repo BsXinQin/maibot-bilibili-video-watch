@@ -134,15 +134,6 @@ def base_config(**overrides):
             "style_hint": "",
             "cache_seconds": 0,
         },
-        "shiwei": {
-            "enabled": True,
-            "cooldown_seconds": 600,
-            "max_share": 1,
-            "search_keywords_per_round": 2,
-            "min_play": 0,
-            "min_duration_seconds": 0,
-            "max_duration_seconds": 7200,
-        },
         "advanced": {
             "data_dir": "",
             "request_timeout_seconds": 12.0,
@@ -673,31 +664,6 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         # 不应重新调用 LLM
         self.assertEqual(self.ctx.llm.calls, [])
 
-    async def test_shiwei_command_shares_without_summary(self) -> None:
-        client = FakeClient(
-            videos=[],
-            search_results=[
-                make_video(
-                    self.video_module,
-                    bvid="BVSHI",
-                    title="离谱整活：这波操作太抽象了",
-                    description="抽象整活",
-                    play=200000,
-                )
-            ],
-        )
-        plugin = self.make_plugin(client=client)
-        result = await plugin.tool_bili_shiwei(stream_id="stream-1")
-        self.assertTrue(result["success"], result)
-        texts = [item["text"] for item in self.ctx.send.messages]
-        joined = "\n".join(texts)
-        self.assertIn("【离谱整活：这波操作太抽象了】", joined)
-        self.assertNotIn("内容：", joined)
-        self.assertNotIn("看点：", joined)
-        # 冷却
-        second = await plugin.share_shiwei("stream-1")
-        self.assertEqual(second["reason"], "cooldown")
-
     # -- 生命周期与配置 ------------------------------------------------
 
     async def test_lifecycle_starts_and_stops_loop(self) -> None:
@@ -734,7 +700,7 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(defaults["schedule"]["interval_minutes"], 60)
         self.assertEqual(defaults["schedule"]["search_cooldown_seconds"], 300)
         self.assertTrue(defaults["plugin"]["enabled"])
-        self.assertEqual(defaults["plugin"]["config_version"], "1.6.6")
+        self.assertEqual(defaults["plugin"]["config_version"], "1.7.0")
         self.assertFalse(defaults["meme"]["enabled"], "学梗默认关闭")
         self.assertTrue(defaults["meme"]["write_to_db"])
         self.assertTrue(defaults["meme"]["auto_learn"])
@@ -755,7 +721,7 @@ class PluginTestCase(unittest.IsolatedAsyncioTestCase):
             plugin_id=PLUGIN_ID, plugin_name="沁の刷B站视频"
         )
         dumped = json.dumps(schema, ensure_ascii=False)
-        for key in ("streams", "interval_minutes", "categories", "shiwei", "vision"):
+        for key in ("streams", "interval_minutes", "categories", "vision"):
             self.assertIn(key, dumped)
 
     # -- 账号登录 ------------------------------------------------------
@@ -1258,7 +1224,6 @@ class PackagingTest(unittest.TestCase):
                     component.get("name") for component in instance.get_components()
                 }
                 self.assertIn("bili_share", command_names)
-                self.assertIn("shiwei_video", command_names)
         finally:
             if old_instance is None:
                 os.environ.pop("MAIBOT_INSTANCE_DIR", None)
@@ -1272,7 +1237,7 @@ class PackagingTest(unittest.TestCase):
             raw = tomllib.load(handle)
         plugin = load_plugin_module().BilibiliInterestSharePlugin()
         plugin.set_plugin_config(raw)  # 不应抛异常
-        self.assertEqual(plugin.config.plugin.config_version, "1.6.6")
+        self.assertEqual(plugin.config.plugin.config_version, "1.7.0")
         self.assertEqual(plugin.config.streams, [])
         self.assertTrue(plugin.config.categories)
         self.assertEqual(plugin.config.vision.task_name, "vlm")

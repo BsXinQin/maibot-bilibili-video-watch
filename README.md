@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.6.6-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.7.0-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v1.6.6** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
+> 当前版本 **v1.7.0** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -33,7 +33,6 @@
   - [`[persona]` 人设语气](#persona-人设语气)
   - [`[share]` 分享格式](#share-分享格式)
   - [`[card]` 卡片直发](#card-卡片直发)
-  - [`[shiwei]` 赤石视频](#shiwei-赤石视频)
   - [`[read]` 读视频](#read-读视频)
   - [`[meme]` 学梗](#meme-学梗)
   - [`[advanced]` 运行参数](#advanced-运行参数)
@@ -64,7 +63,6 @@
 | **噪声过滤** | 硬过滤（时长/播放/点赞/屏蔽词/官方内容）+ AI 鱼灾式模板弹幕评论过滤 |
 | **去重** | 分享过的视频记入名单，默认 30 天内不再自动分享 |
 | **主动搜索** | 麦麦可以自己调 `bili_search` 工具按关键词搜一条并分享，独立冷却（默认 5 分钟），不影响自动频率 |
-| **赤石视频** | 麦麦可以调 `bili_shiwei` 工具抓一个抽象整活视频，只发标题+链接，不带介绍 |
 | **能读视频** | `bili_read` 工具 + 白名单会话里**贴链接自动读**（brief：简介、分P、字幕节选、热评、弹幕，不调视觉模型）；有人 @ 麦麦或说「详细看看」时自动切 full：字幕时间轴、弹幕时间线、更多热评，并**抽帧看画面**；私聊里贴链接默认就走 full |
 | **能学梗** | `bili_learn_meme` 工具：读视频的字幕、**10 秒弹幕爆发点**、热评，让模型整理成一张梗卡（梗名 / 含义 / 用法 / 例句 / 来历 / 时效 / 敏感度），写进麦麦的**黑话库**（`Jargon` 表），之后聊天里命中这个梗它会自然用上；标题像「什么梗 / 梗指南 / 梗科普」的视频被自动读到时也会顺手学一次（默认关闭） |
 | **人设语气** | 推荐语与介绍按 MaiBot 的**麦麦人设**口吻生成，可覆盖、可关 |
@@ -171,7 +169,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.6.6"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.7.0"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -399,22 +397,6 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 
 > 安全提示：这个地址只填内网里的 QQ 客户端，**不要暴露到公网**，Token 也当密码对待。
 
-### `[shiwei]` 赤石视频
-
-| 键 | 默认 | 说明 |
-| --- | --- | --- |
-| `enabled` | `true` | 是否启用赤石视频工具（由麦麦自己决定什么时候整活） |
-| `cooldown_seconds` | `600` | 该工具的冷却（秒） |
-| `max_share` | `1` | 一次最多分享几个 |
-| `keywords` | 见配置 | 搜索关键词（抽象/整活/鬼畜/离谱/翻车/整蛊/土味/迷惑行为…） |
-| `search_keywords_per_round` | `2` | 每次用几个关键词去搜 |
-| `min_play` | `20000` | 最低播放量 |
-| `min_duration_seconds` | `10` | 视频最短时长（秒） |
-| `max_duration_seconds` | `900` | 视频最长时长（秒） |
-| `block_keywords` | 见配置 | 命中即跳过（官方/预告/发布会/宣传片） |
-
-麦麦调用 `bili_shiwei` 工具时只发「【标题】链接」，**不带介绍文案**，也不影响普通分享的去重与冷却。这条路径同样会过 `[filter]` 的全局过滤（`block_keywords`、`block_up_names`、`exclude_official`），并且**只对白名单会话生效**。
-
 ### `[read]` 读视频
 
 这个插件不只是「往外发」，也能「往里读」。同一套接口数据，分两档深度：
@@ -532,10 +514,9 @@ max_share_per_round = 0           # 该流每轮最多几个，0 = 用 [schedule
 | --- | --- | --- |
 | `bili_read` | `url` 必填；`detail` 可选（`brief` / `full`） | 读一个 B 站视频：标题、UP、简介、分P、字幕、热评、弹幕；`full` 另带字幕时间轴、弹幕时间线与画面描述 |
 | `bili_search` | `query` 必填；`count` 可选 | 按关键词搜 B 站并挑一条分享到当前会话；受 `search_cooldown_seconds` 冷却，**只在白名单会话里生效** |
-| `bili_shiwei` | 无 | 抓一个抽象整活视频（赤石），只发标题+链接；受 `[shiwei].cooldown_seconds` 冷却，**只在白名单会话里生效** |
 | `bili_learn_meme` | `url` 必填；`hint` 可选 | 从视频里学梗并写进麦麦黑话库；`hint` 是用户点名要学的梗。受 `[meme].enabled` 控制，默认关闭 |
 
-四个工具都对 Planner 直接可见（`core_tool` + `visibility="visible"`），不需要先 `tool_search`，也不用派子代理空转等待。
+三个工具都对 Planner 直接可见（`core_tool` + `visibility="visible"`），不需要先 `tool_search`，也不用派子代理空转等待。
 
 ---
 
@@ -572,7 +553,7 @@ max_share_per_round = 0           # 该流每轮最多几个，0 = 用 [schedule
   "version": 2,
   "seen": { "BV1xx": { "title": "...", "shared_at": 1760000000, "kind": "auto" } },
   "runs": [ { "at": 1760000000, "fetched": 120, "shared": 1 } ],
-  "cooldowns": { "search": 1760000000, "shiwei": 1760000000 },
+  "cooldowns": { "search": 1760000000 },
   "auto_interests": { "group_id:123456789": ["原神", "机械键盘"] }
 }
 ```
@@ -603,7 +584,7 @@ github.BsXinQin.bilibili_video_watch/
 ├── persona.py            # 通过宿主 config.get 能力读人设，提供人设提示词
 ├── store.py              # 去重名单、分享历史、冷却状态、自动兴趣缓存（state.json）
 ├── tools/
-│   ├── live_check.py     # 真实联网自检（可选抽帧/弹幕/LLM/赤石）
+│   ├── live_check.py     # 真实联网自检（可选抽帧/弹幕/LLM）
 │   ├── probe_persona.py  # 人设自检：打印读到的人设 + 注入后的 prompt（不调模型）
 │   └── probe_vision.py   # 单独验证「下载 + 抽帧」链路
 ├── tests/                # unittest 单元测试（280 个用例）
@@ -636,7 +617,7 @@ python build.py
 
 CI：`.github/workflows/tests.yml` 在 push / PR 时用 Python 3.13 装依赖并跑同一套 `unittest`。
 
-覆盖：兴趣提取与打分、B 站客户端（httpx.MockTransport）、读视频（brief / full 两档、缓存、超长截断）、自动读（brief 不调视觉、@ 与关键词触发 full、去重按模式分键）、弹幕/评论解析与鱼灾过滤、抽帧帧选择、LLM 判断降级、人设读取与提示词注入、自动兴趣写回与锁定、人设兴趣种子、插件完整轮次、去重、冷却、赤石（含全局屏蔽词）、工具（白名单与参数校验）、类别级每轮上限、下载地址与 bvid 安全校验、配置模板与文档一致性，以及用宿主真实 `ManifestValidator` / `PluginLoader` 校验打包。
+覆盖：兴趣提取与打分、B 站客户端（httpx.MockTransport）、读视频（brief / full 两档、缓存、超长截断）、自动读（brief 不调视觉、@ 与关键词触发 full、去重按模式分键）、弹幕/评论解析与鱼灾过滤、抽帧帧选择、LLM 判断降级、人设读取与提示词注入、自动兴趣写回与锁定、人设兴趣种子、插件完整轮次、去重、冷却、工具（白名单与参数校验）、类别级每轮上限、下载地址与 bvid 安全校验、配置模板与文档一致性，以及用宿主真实 `ManifestValidator` / `PluginLoader` 校验打包。
 
 真实联网自检：
 
@@ -649,9 +630,6 @@ python tools/live_check.py 原神 --limit 2 --danmaku --parts
 
 # 走完整 LLM 判断（需要宿主环境能调 planner）
 python tools/live_check.py 原神 --limit 1 --llm
-
-# 验证赤石（bili_shiwei）
-python tools/live_check.py --shiwei --limit 2 --parts
 
 # 单独验证下载 + 抽帧（不调 LLM）
 python tools/probe_vision.py --save ..\bili-frames
@@ -699,7 +677,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 - **排行榜接口**风控较严，未配 Cookie 时基本拿不到数据，所以默认关闭。
 - **抽帧依赖 ffmpeg**：都没有时自动跳过识图，其余流程正常。
 - **识图需要支持视觉的模型**：自动分享入选视频与 full 读都会调它，默认 `vlm` 任务；没有就把 `[vision].task_name` 改成支持图片的模型任务名，或关掉 `[vision].enabled`（full 读仍可用，只是没有画面描述）。
-- **没有聊天指令**：平台会拦截 `/` 开头的消息，插件只提供 `bili_read` / `bili_search` / `bili_shiwei` / `bili_learn_meme` 四个工具，由麦麦自己决定什么时候调用。
+- **没有聊天指令**：平台会拦截 `/` 开头的消息，插件只提供 `bili_read` / `bili_search` / `bili_learn_meme` 三个工具，由麦麦自己决定什么时候调用。
 - **LLM 判断有成本**：`llm_max_candidates` 控制每轮最多判断几个，默认 5。
 - **人设依赖宿主配置**：通过 `config.get` 读取；读不到时退回中性语气，不影响分享。
 - 分享的是**文字 / 封面图 / 小程序卡片**，不会把视频文件发到群里。
@@ -711,6 +689,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v1.7.0**：删掉「赤石视频」整块（`bili_shiwei` 工具、`[shiwei]` 配置节、`share_shiwei` 与相关冷却常量）；想整活直接让麦麦用 `bili_search` 自己搜
 - **v1.6.6**：随口一句改成按概率触发（`[share].casual_chance`，0~100 %），没抽中的那几次只发标题链接
 - **v1.6.5**：图文分享改成「先发封面 + 链接（合成一条），再把随口一句单独发一条」—— 随口一句不再掺进链接那条；卡片回退时不会重复发前言
 - **v1.6.4**：封面图和链接合成同一条消息发出（`[share].single_message`，走宿主 `send.hybrid`；不支持就自动退回先图后字）

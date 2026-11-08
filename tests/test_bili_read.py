@@ -477,7 +477,7 @@ class PluginReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("子代理", metadata.get("description", ""))
         names = [item.get("name") for item in components]
         self.assertNotIn("bili_read_cmd", names, "聊天指令已移除")
-        for name in ("bili_search", "bili_shiwei"):
+        for name in ("bili_search",):
             tool = [item for item in components if item.get("name") == name]
             self.assertEqual(len(tool), 1, name)
             tool_meta = tool[0].get("metadata") or {}

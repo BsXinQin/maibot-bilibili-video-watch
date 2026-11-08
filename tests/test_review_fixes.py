@@ -1,4 +1,4 @@
-"""审核反馈修复的回归测试：类别上限、指令白名单、赤石屏蔽词、指令参数解析。"""
+"""审核反馈修复的回归测试：类别上限、工具白名单、指令参数解析。"""
 
 from __future__ import annotations
 
@@ -127,45 +127,6 @@ class ReviewFixesTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("白名单", result["error"])
         joined = "\n".join(item["text"] for item in self.ctx.send.messages)
         self.assertNotIn("bilibili.com/video", joined)
-
-    async def test_shiwei_tool_rejects_non_whitelisted_stream(self) -> None:
-        plugin = self.make_plugin(
-            client=FakeClient(
-                videos=[],
-                search_results=[
-                    make_video(self.video_module, bvid="BVSHI9", title="离谱整活：抽象操作")
-                ],
-            )
-        )
-        result = await plugin.tool_bili_shiwei(stream_id="other-stream")
-        self.assertFalse(result["success"])
-        self.assertIn("白名单", result["error"])
-        joined = "\n".join(item["text"] for item in self.ctx.send.messages)
-        self.assertNotIn("bilibili.com/video", joined)
-
-    # -- 赤石路径的全局屏蔽词 -------------------------------------------
-
-    async def test_shiwei_respects_global_block_keywords(self) -> None:
-        """赤石视频也要过 [filter].block_keywords，别把广告当整活发出去。"""
-
-        plugin = self.make_plugin(
-            base_config(filter={"block_keywords": ["广告"]}),
-            client=FakeClient(
-                videos=[],
-                search_results=[
-                    make_video(
-                        self.video_module,
-                        bvid="BVAD",
-                        title="离谱整活：这广告也太抽象了",
-                        play=200000,
-                    )
-                ],
-            ),
-        )
-        result = await plugin.share_shiwei("stream-1")
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "no_candidates")
-        self.assertEqual(self.ctx.send.messages, [])
 
     # -- 工具参数校验 ---------------------------------------------------
 

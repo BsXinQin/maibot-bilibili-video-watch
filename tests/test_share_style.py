@@ -1359,13 +1359,6 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertEqual(self.ctx.send.messages, [])
 
-    async def test_image_style_respects_shiwei_no_narrative(self):
-        plugin = self._plugin(share={"style": "image", "single_message": False})
-        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
-        self._cover(plugin)
-        await plugin._send_parts("stream-1", video, "这段文案不该出现", kind="shiwei")
-        self.assertNotIn("这段文案不该出现", self.ctx.send.messages[0]["text"])
-
     async def test_tuwen_kind_sends_native_ark(self):
         plugin = self._plugin(
             share={"style": "card"},

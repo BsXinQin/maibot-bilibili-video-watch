@@ -16,13 +16,13 @@
       },
       "runs": [{"at": ..., "fetched": 40, "shared": 1, "targets": [...]}],
       "streams": {"<stream_id>": {"last_shared_at": ..., "shared_total": 3}},
-      "cooldowns": {"active_search": 1710000000.0, "shiwei": 1710000000.0},
+      "cooldowns": {"active_search": 1710000000.0},
       "auto_interests": {"stream_id:123": ["原神", "编程"]}
     }
 
 - ``videos`` 就是「已经刷过的视频名单」：名单里的视频不会再被抓取/主动分享，
   再次遇到同一条视频时会被去重跳过。
-- ``cooldowns`` 记录「主动搜索」与「赤石视频」各自的冷却时间。
+- ``cooldowns`` 记录「主动搜索」的冷却时间。
 - ``auto_interests`` 记录插件上次写进 ``config.toml`` 的自动兴趣词，
   用来判断用户之后有没有手改过（手改过就不再自动覆盖）。
 
@@ -43,7 +43,6 @@ logger = logging.getLogger("plugin.bilibili_interest_share.store")
 
 _MAX_RUN_HISTORY = 20
 COOLDOWN_ACTIVE_SEARCH = "active_search"
-COOLDOWN_SHIWEI = "shiwei"
 
 
 class SeenStore:
