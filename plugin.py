@@ -491,10 +491,39 @@ def filter_messages_by_lookback(
     return kept
 
 
-def format_share_header(video: Video) -> str:
+def build_share_link(url: str, vd_source: str = "") -> str:
+    """把视频链接换成 B 站「复制链接」的官方格式。
+
+    网页/客户端里点「分享 → 复制链接」出来的是：
+    https://www.bilibili.com/video/BVxxx/?share_source=copy_web&vd_source=...
+    比裸链接更像真人转发，也不会被平台当成广告短链。
+    """
+
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    match = re.search(r"(BV[0-9A-Za-z]{10})", raw)
+    if match:
+        # 只换域名和 BV 段，原来带的 ?p=2 / ?t=30 这类参数要留着
+        query = raw.split("?", 1)[1].split("#", 1)[0] if "?" in raw else ""
+        query = query.split("share_source=", 1)[0].rstrip("&")
+        base = "https://www.bilibili.com/video/" + match.group(1) + "/"
+        if query:
+            base = base + "?" + query
+    else:
+        base = raw if raw.endswith("/") else raw + "/"
+    sep = "&" if "?" in base else "?"
+    link = base + sep + "share_source=copy_web"
+    vd = (vd_source or "").strip()
+    if vd:
+        link = link + "&vd_source=" + vd
+    return link
+
+
+def format_share_header(video: Video, vd_source: str = "") -> str:
     """B 站标准转发格式：【标题】 链接。"""
 
-    return f"【{video.title}】 {video.url}"
+    return f"【{video.title}】 {build_share_link(video.url, vd_source)}"
 
 
 # ----------------------------------------------------------------------
@@ -2134,7 +2163,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
 
         config = self.config
         line = "" if kind == "shiwei" else (narrative or "").strip()
-        header = format_share_header(video)
+        header = format_share_header(video, getattr(config.share, "vd_source", ""))
         stats = ""
         if config.share.include_stats_line:
             stats = (

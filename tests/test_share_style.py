@@ -1429,3 +1429,46 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         ok = await plugin._send_parts("stream-1", video, "再看看")
         self.assertTrue(ok)
         self.assertEqual(len(calls["send"]), 1)
+
+
+class ShareLinkTests(unittest.TestCase):
+    """分享链接用 B 站官方「复制链接」格式。"""
+
+    def setUp(self) -> None:
+        self.module = load_plugin_module()
+        self.video_module = load_submodule("bilibili")
+
+    def test_builds_official_link(self):
+        link = self.module.build_share_link(
+            "https://www.bilibili.com/video/BV1VDWJ6VEXs", "55d6a24d42e550c9ccab2084f87c67d0"
+        )
+        self.assertEqual(
+            link,
+            "https://www.bilibili.com/video/BV1VDWJ6VEXs/?share_source=copy_web"
+            "&vd_source=55d6a24d42e550c9ccab2084f87c67d0",
+        )
+
+    def test_without_vd_source(self):
+        link = self.module.build_share_link("https://www.bilibili.com/video/BV1oGxs6hEWP/")
+        self.assertEqual(
+            link, "https://www.bilibili.com/video/BV1oGxs6hEWP/?share_source=copy_web"
+        )
+
+    def test_keeps_existing_query(self):
+        link = self.module.build_share_link(
+            "https://www.bilibili.com/video/BV1Nn4w6QEJ1/?p=2&t=30", ""
+        )
+        self.assertEqual(
+            link,
+            "https://www.bilibili.com/video/BV1Nn4w6QEJ1/?p=2&t=30&share_source=copy_web",
+        )
+
+    def test_empty_url_returns_empty(self):
+        self.assertEqual(self.module.build_share_link(""), "")
+
+    def test_header_uses_official_link(self):
+        video = make_video(self.video_module)  # url 由 bvid 推导：BV1TEST00001
+        header = self.module.format_share_header(video, "abc123")
+        self.assertTrue(header.startswith("【"))
+        self.assertIn("https://www.bilibili.com/video/BV1TEST00001/?share_source=copy_web", header)
+        self.assertIn("vd_source=abc123", header)

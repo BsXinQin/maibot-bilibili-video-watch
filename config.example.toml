@@ -10,7 +10,7 @@
 # 启用插件 —— 是否启用沁の刷B站视频
 enabled = true
 # 配置版本
-config_version = "1.6.2"
+config_version = "1.6.3"
 
 [schedule]
 # 刷取间隔（分钟） —— 每隔多少分钟自动刷一次 B 站：1=每分钟，60=每小时，1440=每天（可调范围 1 分钟 ~ 24 小时）
@@ -241,6 +241,8 @@ card_caption = true
 casual_max_chars = 60
 # 附带视频信息 —— 是否在标题链接后面附带播放量 / 点赞 / UP 主信息
 include_stats_line = false
+# 分享链接的 vd_source —— B 站「复制链接」里的设备标识，填上就和网页复制出来的一模一样；留空只带 share_source=copy_web
+vd_source = ""
 
 [card]
 # OneBot HTTP 地址 —— QQ 客户端（NapCat / SnowLuma）的 HTTP 接口地址，默认端口都是 3000，如 http://172.23.0.2:3000；只发文字时不用填

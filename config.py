@@ -43,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.6.2",
+        default="1.6.3",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -667,6 +667,13 @@ class ShareConfig(PluginConfigBase):
         le=160,
         description="分享时那句随口话的最大字数（超长会截断）",
         json_schema_extra={"label": "随口一句字数上限"},
+    )
+    vd_source: str = Field(
+        default="",
+        description=(
+            "分享链接里的 vd_source 参数 —— B 站「复制链接」那串链接带的设备标识，填上就和网页复制出来的完全一样；留空只带 share_source=copy_web"
+        ),
+        json_schema_extra={"label": "分享链接的 vd_source（可留空）", "placeholder": "55d6a24d42e550c9ccab2084f87c67d0"},
     )
     include_stats_line: bool = Field(
         default=False,

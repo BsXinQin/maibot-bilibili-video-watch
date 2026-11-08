@@ -5,6 +5,19 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.6.3] - 2026-11-08
+
+### 变更
+
+- 分享链接换成 B 站「复制链接」的官方格式：
+
+  ```
+  【【明日方舟】“时间啊，向前！”TL-EX1~8摆完挂机全关卡攻略！】 https://www.bilibili.com/video/BV1VDWJ6VEXs/?share_source=copy_web&vd_source=55d6a24d42e550c9ccab2084f87c67d0
+  ```
+
+- 新增纯函数 `build_share_link(url, vd_source="")`：从任意视频链接里抠出 BV 号，重拼成带 `share_source=copy_web`（和可选 `vd_source`）的官方链接；`format_share_header()` 加 `vd_source` 参数。
+- 新增配置 `[share].vd_source`（默认空）：填上自己的那串设备标识就和网页复制完全一致，留空只带 `share_source=copy_web`。
+- 文字分享、图文分享的标题链接都走这个格式；卡片（如果哪天能发出去）的跳转地址仍是干净的视频链接。
 ## [1.6.2] - 2026-11-08
 
 ### 新增
