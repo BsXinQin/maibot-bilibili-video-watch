@@ -67,7 +67,7 @@ try:  # 宿主正常按包加载插件
         normalize_term,
         rank_videos,
     )
-    from .llm_judge import LlmJudge
+    from .llm_judge import LlmJudge, clip_casual
     from .media import FrameExtractor, cleanup_dir, safe_bvid
     from meme import (
         MEME_TITLE_HINTS,
@@ -116,7 +116,7 @@ except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回
         normalize_term,
         rank_videos,
     )
-    from llm_judge import LlmJudge
+    from llm_judge import LlmJudge, clip_casual
     from media import FrameExtractor, cleanup_dir, safe_bvid
     from meme import (
         MEME_TITLE_HINTS,
@@ -961,9 +961,10 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         for result, judged in picked:
             narrative_text = str((judged or {}).get("narrative") or "").strip()
             if not narrative_text:
-                narrative_text = (result.video.description or "").strip()[
-                    : int(config.share.casual_max_chars)
-                ]
+                narrative_text = clip_casual(
+                    result.video.description or "",
+                    int(config.share.casual_max_chars),
+                )
             sent = await self._send_parts(
                 stream_id,
                 result.video,
@@ -2023,7 +2024,8 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         """发送分享：按配置选文字 / 封面图文，失败逐级回退。"""
 
         config = self.config
-        line = (narrative or "").strip()
+        # 名单里复用的旧文案可能超过上限，统一在这里按句读裁一次（不补省略号）
+        line = clip_casual(narrative, int(config.share.casual_max_chars))
         if line and not self._roll_casual():
             logger.info("随口一句按概率跳过（[share].casual_chance），这次只发标题链接：%s", video.bvid)
             line = ""
@@ -2128,9 +2130,10 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                     subtitle=subtitle,
                     casual_max_chars=config.share.casual_max_chars,
                 )
-            narrative_text = str((judged or {}).get("narrative") or "") or (
-                video.description or ""
-            )[: int(config.share.casual_max_chars)]
+            narrative_text = str((judged or {}).get("narrative") or "") or clip_casual(
+                video.description or "",
+                int(config.share.casual_max_chars),
+            )
             if await self._send_parts(
                 stream_id,
                 video,

@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-2.0.0-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.0.1-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v2.0.0** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文（封面图和链接可合成一条）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
+> 当前版本 **v2.0.1** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文（封面图和链接可合成一条）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -170,7 +170,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `2.0.0` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `2.0.1` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -359,7 +359,7 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 
 `text` 下分享是**一条消息**「随口一句 + 【标题】链接」，不分条、也不再单独发推荐语或长介绍——那几个开关在「随口一提」下本来就被短路，留着只会让人以为改了有用，所以 1.3.0 全部删掉了。
 
-字数上限管两头：LLM 生成的那句话会被截到这个长度；没有 LLM 可用时，退回的视频简介也会被截到这个长度。
+字数上限管两头：LLM 生成的那句话会被裁到这个长度；没有 LLM 可用时，退回的视频简介也会被裁到这个长度。裁剪按句读走——优先在句号处收尾，其次在逗号处（连标点一起去掉），**不会补「…」**，所以不会出现断在半截的残句。
 
 `image` 依赖视频封面（B 站接口返回的 `pic` 字段，插件会自动补成 `https://`）。封面下载失败时不会空转：直接退化成纯文字分享，所以**最差情况就是原来的纯文字分享**，不会丢消息。
 
@@ -651,6 +651,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v2.0.1**：随口一句超字数时改成按句读裁剪，不再追加「…」（以前会出现「数据图看着还…」这种残句）；`_send_parts()` 统一裁一次，名单里复用的旧长文案也会被裁到上限内。
 - **v2.0.0**：**删掉整个 QQ 小程序卡片功能**（`[card]` 整节配置、`card_caption`、`share_card.py` 与所有卡片回退 / 回查逻辑）。QQ 对协议端发的 ark 有客户端版本校验，一律在服务端降级成「发送者版本过低，无法展示内容」，留着只会多一堆看不懂的开关。分享形式现在只有 `text` / `image` 两种；配置里如果还留着 `style = card`，2.0.0 会自动按 `image` 发并在日志里提示一次。
 - **v1.7.0**：删掉「赤石视频」整块（`bili_shiwei` 工具、`[shiwei]` 配置节、`share_shiwei` 与相关冷却常量）；想整活直接让麦麦用 `bili_search` 自己搜
 - **v1.6.6**：随口一句改成按概率触发（`[share].casual_chance`，0~100 %），没抽中的那几次只发标题链接

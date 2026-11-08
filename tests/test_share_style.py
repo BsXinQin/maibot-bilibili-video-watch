@@ -89,6 +89,40 @@ class ActiveHoursTests(unittest.TestCase):
         )
 
 
+class ClipCasualTests(unittest.TestCase):
+    """随口一句按句读裁剪：不补省略号，尽量断在标点上。"""
+
+    def setUp(self) -> None:
+        self.module = load_submodule("llm_judge")
+
+    def test_short_text_untouched(self):
+        self.assertEqual(self.module.clip_casual("刷到这个挺好笑", 30), "刷到这个挺好笑")
+
+    def test_cuts_at_sentence_end(self):
+        text = "这里吵得挺凶。后面还有一大段没必要说的话"
+        self.assertEqual(self.module.clip_casual(text, 8), "这里吵得挺凶。")
+
+    def test_drops_dangling_comma(self):
+        text = "刷到个方舟节奏拆解，塔露拉强度那事儿吵得挺凶"
+        self.assertEqual(self.module.clip_casual(text, 20), "刷到个方舟节奏拆解")
+
+    def test_hard_cut_has_no_ellipsis(self):
+        text = "一" * 40
+        out = self.module.clip_casual(text, 12)
+        self.assertEqual(out, "一" * 12)
+        self.assertNotIn("…", out)
+        self.assertNotIn("...", out)
+
+    def test_limit_zero_returns_empty(self):
+        self.assertEqual(self.module.clip_casual("随便一句", 0), "")
+
+    def test_collapses_newlines_and_spaces(self):
+        self.assertEqual(
+            self.module.clip_casual("第一行\n\n第二行   第三行", 60),
+            "第一行 第二行 第三行",
+        )
+
+
 class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
     """_send_parts 按 share.style 分派，并逐级回退。"""
 
@@ -191,6 +225,18 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertEqual(self.ctx.send.hybrids, [])
         self.assertIn("【原神新版本测评】", self.ctx.send.messages[0]["text"])
+
+    async def test_overlong_narrative_is_trimmed_without_ellipsis(self):
+        plugin = self._plugin(share={"casual_max_chars": 20})
+        video = make_video(self.video_module)
+        long_line = "刷到个方舟节奏拆解，塔露拉强度那事儿吵得挺凶，数据图看着还行"
+        ok = await plugin._send_parts("stream-1", video, long_line)
+        self.assertTrue(ok)
+        text = self.ctx.send.messages[0]["text"]
+        self.assertTrue(text.startswith("刷到个方舟节奏拆解 "))
+        self.assertNotIn("塔露拉", text)
+        self.assertNotIn("…", text)
+        self.assertNotIn("...", text)
 
     async def test_image_style_falls_back_without_cover(self):
         plugin = self._plugin(share={"style": "image"})

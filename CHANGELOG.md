@@ -5,6 +5,17 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [2.0.1] - 2026-11-08
+
+### 修复
+
+- 随口一句超字数时不再硬切并补「…」：改成按句读裁剪——先找句号/问号/感叹号（保留标点），其次逗号/顿号（连标点一起去掉），再退回空格，实在没有标点才硬切。群里不会再出现「数据图看着还…」这种断在半截的句子。
+- 新增 `llm_judge.clip_casual()`；`_send_parts()` 统一在发送前裁一次，所以名单里复用的旧长文案也会被裁到上限之内（以前只在生成时裁）。
+
+### 说明
+
+裁剪长度仍由 `[share].casual_max_chars` 决定，只是断句位置更自然、不再加省略号。
+
 ## [2.0.0] - 2026-11-08
 
 ### 移除

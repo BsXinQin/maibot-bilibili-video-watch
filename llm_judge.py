@@ -185,6 +185,39 @@ def _clip(text: str, limit: int) -> str:
     return text[: max(0, limit - 1)] + "…"
 
 
+# 随口一句能收尾的句读：句末标点保留，句中标点去掉
+_SENTENCE_ENDS = "。！？!?；;"
+_CLAUSE_ENDS = "，,、：:"
+
+
+def clip_casual(text: str, limit: int) -> str:
+    """把随口一句裁到 limit 字以内：不补省略号，尽量在句读处收尾。
+
+    直接截断会留下「数据图看着还…」这种断在半截的残句，所以先找 limit
+    之内的句号，其次找逗号/顿号（连标点一起去掉），再退回空格；都找不到
+    才硬切。任何情况下都不会追加省略号。
+    """
+
+    cleaned = " ".join(str(text or "").split())
+    limit = int(limit or 0)
+    if limit <= 0:
+        return ""
+    if len(cleaned) <= limit:
+        return cleaned
+    head = cleaned[:limit]
+    floor = max(4, limit // 3)
+    end = max(head.rfind(ch) for ch in _SENTENCE_ENDS)
+    if end >= floor:
+        return head[: end + 1].strip()
+    end = max(head.rfind(ch) for ch in _CLAUSE_ENDS)
+    if end >= floor:
+        return head[:end].strip()
+    end = head.rfind(" ")
+    if end >= floor:
+        return head[:end].strip()
+    return head.strip()
+
+
 def build_judge_prompt(
     video: Any,
     *,
@@ -457,12 +490,12 @@ class LlmJudge:
         except (TypeError, ValueError):
             score = 0.0
         narrative_limit = casual_max_chars
-        narrative = _clip(str(data.get("narrative") or ""), narrative_limit)
+        narrative = clip_casual(str(data.get("narrative") or ""), narrative_limit)
         if not narrative:
             # 兼容旧格式回复：只有 summary/points 时，用 summary 兜底成一段叙述
             legacy_summary = str(data.get("summary") or "").strip()
             if legacy_summary:
-                narrative = _clip(legacy_summary, narrative_limit)
+                narrative = clip_casual(legacy_summary, narrative_limit)
         return {
             "relevant": relevant,
             "score": score,
