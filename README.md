@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.7.0-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.0.0-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v1.7.0** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
+> 当前版本 **v2.0.0** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文（封面图和链接可合成一条）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -32,7 +32,6 @@
   - [`[scoring]` 打分](#scoring-打分)
   - [`[persona]` 人设语气](#persona-人设语气)
   - [`[share]` 分享格式](#share-分享格式)
-  - [`[card]` 卡片直发](#card-卡片直发)
   - [`[read]` 读视频](#read-读视频)
   - [`[meme]` 学梗](#meme-学梗)
   - [`[advanced]` 运行参数](#advanced-运行参数)
@@ -66,7 +65,7 @@
 | **能读视频** | `bili_read` 工具 + 白名单会话里**贴链接自动读**（brief：简介、分P、字幕节选、热评、弹幕，不调视觉模型）；有人 @ 麦麦或说「详细看看」时自动切 full：字幕时间轴、弹幕时间线、更多热评，并**抽帧看画面**；私聊里贴链接默认就走 full |
 | **能学梗** | `bili_learn_meme` 工具：读视频的字幕、**10 秒弹幕爆发点**、热评，让模型整理成一张梗卡（梗名 / 含义 / 用法 / 例句 / 来历 / 时效 / 敏感度），写进麦麦的**黑话库**（`Jargon` 表），之后聊天里命中这个梗它会自然用上；标题像「什么梗 / 梗指南 / 梗科普」的视频被自动读到时也会顺手学一次（默认关闭） |
 | **人设语气** | 推荐语与介绍按 MaiBot 的**麦麦人设**口吻生成，可覆盖、可关 |
-| **分享形式** | `[share].style` 可选：`text` 一条文字（默认）、`image` 封面图 + 文字、`card` QQ 小程序卡片（直连 QQ 客户端的 OneBot HTTP 发 json 卡片，发不出去自动退回图文 → 文字） |
+| **分享形式** | `[share].style` 可选：`text` 一条文字（默认）、`image` 封面图 + 【标题】链接（`single_message = true` 时合成一条消息） |
 | **全中文配置** | 每个配置项都有中文名和中文说明，WebUI 表单直接看得懂 |
 
 ---
@@ -98,7 +97,9 @@
 【【原神】5.2 深渊满星配队实测】 https://www.bilibili.com/video/BV1xxxxxxxxx
 ```
 
-改成 `card`，则直接发一张 **QQ 小程序卡片**（封面 + 标题 + 跳转链接），点一下就能进 B 站；卡片需要额外在 `[card]` 里填 QQ 客户端的 OneBot HTTP 地址，具体见 [`[card]` 卡片直发](#card-卡片直发)。
+`[share].single_message = false` 时，封面图和链接会分两条发（宿主不支持 `send.hybrid` 时也会自动退回两条）。
+
+> 2.0.0 起不再支持发 QQ 小程序卡片：实测 QQ 会把协议端发的 ark 统一降级成「发送者版本过低，无法展示内容」，所以 `card` 选项、`[card]` 整节配置与相关代码都删掉了。
 
 ---
 
@@ -169,7 +170,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.7.0"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `2.0.0` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -349,8 +350,7 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `style` | `"text"` | 分享形式：`text` 一条文字、`image` 封面图 + 文字、`card` QQ 小程序卡片 |
-| `card_caption` | `true` | `style = "card"` 时，卡片前面要不要先发那句随口话 |
+| `style` | `text` | 分享形式：`text` 一条文字、`image` 封面图 + 文字 + 链接 |
 | `casual_max_chars` | `60` | 那句随口话的字数上限（`20`~`160`） |
 | `casual_chance` | `100` | 每次分享带随口话的概率（`0`~`100`，单位 %）：`100` 每次都带，`0` 从不带，`60` 就是六成次数带 |
 | `include_stats_line` | `false` | 链接后面是否附一行播放量 / 点赞 / UP 主 |
@@ -361,41 +361,7 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 
 字数上限管两头：LLM 生成的那句话会被截到这个长度；没有 LLM 可用时，退回的视频简介也会被截到这个长度。
 
-`image` 依赖视频封面（B 站接口返回的 `pic` 字段，插件会自动补成 `https://`）；`card` 现在本地就能拼出完整的小程序卡结构，**没有封面也能发**（预览图留空）。封面下载失败时不会空转：`image` 退回 `text`，`card` 先退回 `image`（`fallback_to_image = true` 时）再退回 `text`，所以**最差情况就是退化成原来的纯文字分享**，不会丢消息。
-
-### `[card]` 卡片直发
-
-`[share].style = "card"` 时，插件会自己拼一张 OneBot 的 `json` 段（小程序卡片）发给 QQ。
-
-**为什么不能走麦麦自带的发送能力？** 麦麦主程序与 SnowLuma / NapCat 适配器的出站编码器都只认 `text` / `image` / `at` / `reply` 这些基础段，`json` 段会被降级成一行 `[unsupported:json]` 文本（入站方向它们倒是能解析卡片）。所以插件改成**直接连 QQ 客户端的 OneBot HTTP 接口**发这一条，绕开出站白名单。
-
-| 键 | 默认 | 说明 |
-| --- | --- | --- |
-| `api_base` | `""` | QQ 客户端的 OneBot HTTP 地址，如 `http://172.23.0.2:3000`；留空则卡片不启用（`card` 自动退回图文） |
-| `access_token` | `""` | 上面接口的 Token，要和 QQ 客户端里配的一致 |
-| `card_kind` | `"miniapp"` | `miniapp` = 小程序卡片（按手机上转发出来的真卡片逐字段复刻：外层 `appID=100951776`、`view_<分享模板ID>`、`config.forward`、`bthirdappforward`、`detail_1.qqdocurl`，所以不会再有「小程序已下架」）；`tuwen` = 原生图文 Ark 卡片（不依赖小程序，SnowLuma 专有，做退路）；`news` = 通用图文卡片（更老版本的 QQ 也能显示） |
-| `use_official_ark` | `true` | `miniapp` 时再向 QQ 客户端要一份官方卡片（SnowLuma 的 `get_mini_app_ark`），**只用来补本地模板里空着的字段**（`url`、`icon`、`config.token` 等）；结构（`appID` / `view` / `config`）永远用本地真模板，官方返回 `viewMultiMsg` 之类的通用值不会覆盖它。NapCat 没这个动作就纯本地拼卡 |
-| `miniapp_forward` | `false` | `miniapp` 卡片是否带手机那张卡上的「第三方 App 转发」标记（`bthirdappforward` + `config.forward=1`）。带标记时 SnowLuma 常常拿不到消息回执（日志 `group message delivery was not confirmed: QQ returned no message receipt`），所以默认关；**不管开关，发失败都会自动换另一种版本重发一次** |
-| `fallback_to_image` | `true` | 卡片发不出去时，改发「封面图 + 文字」 |
-| `verify_send` | `true` | 发完回查这条消息：被 QQ 降级成「发送者版本过低，无法展示内容」就撤回，并改发封面图 + 文字 |
-| `verify_history` | `true` | 没拿到消息回执时先查群历史：卡片已在群里就算发送成功、不再重发；查不到才换另一种版本重试（避免同一张卡发两遍） |
-| `card_auto_disable` | `true` | 某种卡片样式被 QQ 降级过（群里显示「发送者版本过低，无法展示内容」）就记住，之后的分享直接用封面图 + 文字，不再每条都先发一份兜底文本。想再试一次就删掉插件数据目录里的 `card_state.json` |
-| `card_kind = "tuwen"` 额外说明 | — | 走 SnowLuma 的 `send_tuwen_ark`，参数是 `title` / `desc` / `summary` / `preview_url` / `jump_url`；NapCat 没这个动作，会自动退回图文 |
-| `timeout_seconds` | `8.0` | 请求 OneBot 接口的超时（`1`~`30` 秒） |
-
-怎么填 `api_base`：
-
-- **NapCat**：看它配置里 HTTP 服务监听的 `host` 与 `port`（默认端口 `3000`），地址就是 `http://<宿主机或容器 IP>:<端口>`。
-- **SnowLuma**：默认就开着 OneBot HTTP：`host` `0.0.0.0`、`port` `3000`、`path` `/`，所以地址一般就是 `http://<SnowLuma 容器 IP>:3000`。Token 在它的配置里：`config/onebot.json`（全局默认）或 `config/onebot_<uin>.json`（账号级覆盖）的 `accessToken`，授权用 `Authorization: Bearer` 或 `?access_token=` 都行。要改端口就在这两个 JSON 的 `httpServers` 里改 `port`，改完重启 SnowLuma。
-- 容器里的 SnowLuma 记得把 `3000` 映射出来（官方 compose 是 `-p 3000:3000`，WebUI 是 `5099`、WS 是 `3001`）；插件和它在同一个 Docker 网络时可以直接用容器 IP，跨机器就用宿主机 IP + 映射端口。
-- 插件和 QQ 客户端不在同一台机器 / 同一个 Docker 网络时，`127.0.0.1` 是**不通**的，要填对方容器的地址（`docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}" <容器名>`）或宿主机可达的地址。
-- 填了 Token 时，插件先试 `Authorization: Bearer <token>`，被 401 / 403 挡回会自动改走 `?access_token=`。
-
-群聊先走 `/send_group_msg`（`group_id`），私聊先走 `/send_private_msg`（`user_id`），群号 / QQ 号会转成整数再发，从宿主枚举到的聊天流里取；取不到就按卡片失败处理、走上面的回退链。
-
-**SnowLuma 的兼容处理**：SnowLuma 画像只实现通用 `/send_msg`（要带 `message_type`），不认 `send_group_msg` / `send_private_msg`。插件第一次发如果收到「不认识的动作」（`retcode` 为 `1404`，或提示里有 `unknown action` / `不支持`），会自动换成 `/send_msg` + `message_type: group|private` 再发一次；其它失败（比如风控）不会重发，避免重复发消息。
-
-> 安全提示：这个地址只填内网里的 QQ 客户端，**不要暴露到公网**，Token 也当密码对待。
+`image` 依赖视频封面（B 站接口返回的 `pic` 字段，插件会自动补成 `https://`）。封面下载失败时不会空转：直接退化成纯文字分享，所以**最差情况就是原来的纯文字分享**，不会丢消息。
 
 ### `[read]` 读视频
 
@@ -662,9 +628,6 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 **Q：读视频报「B 站接口返回 HTTP 412」？**
 412 是 B 站 WAF 层的风控拦截，不是接口参数错。常见原因是服务器（云主机 / 机房 IP）被风控，或者匿名请求没带 `buvid` Cookie。1.0.1 起插件会先自动申请 `buvid3`/`buvid4` 并重试一次；仍然 412 就在 WebUI 的 `[account] cookie` 里填上浏览器 Cookie，登录态能绕过大部分风控。填了 Cookie 还报 412，说明是该出口 IP 被限制，需要换网络或走代理。
 
-**Q：选了卡片，但发出来还是图文 / 纯文字？**
-按顺序看：① `[card].api_base` 填了没、从插件所在的容器能不能访问到（`docker exec <麦麦容器> python -c "import socket; socket.create_connection(('<IP>', <端口>), 3)"` 试一下）；② `access_token` 是否和 QQ 客户端一致；③ 日志里搜「卡片」，失败原因会写在那里（带 HTTP 状态或接口返回的报错）。另外 `miniapp` 需要封面，没封面的视频会自动降级成 `news` 图文卡片，这也算正常。
-
 **Q：换连接器 / 适配器后发不出去？**
 换账号后同一个群可能同时存在旧账号和新账号两套会话，宿主接口可能返回已掉线的那套。插件会枚举同群/同用户的会话，发送失败时自动换一个重试并记住可用的那个。
 
@@ -680,8 +643,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 - **没有聊天指令**：平台会拦截 `/` 开头的消息，插件只提供 `bili_read` / `bili_search` / `bili_learn_meme` 三个工具，由麦麦自己决定什么时候调用。
 - **LLM 判断有成本**：`llm_max_candidates` 控制每轮最多判断几个，默认 5。
 - **人设依赖宿主配置**：通过 `config.get` 读取；读不到时退回中性语气，不影响分享。
-- 分享的是**文字 / 封面图 / 小程序卡片**，不会把视频文件发到群里。
-- **小程序卡片要额外开一个口子**：麦麦与两个 QQ 适配器都不透传出站 `json` 段，所以卡片由插件直连 QQ 客户端的 OneBot HTTP 发送；没配 `[card].api_base`、或 QQ 客户端那边没开 HTTP 服务时，只会发出图文 / 文字。
+- 分享的是**文字 / 封面图**，不会把视频文件发到群里。
 - **Cookie 以明文存盘**：写在插件目录的 `config.toml` 里，注意不要泄露或提交到公开仓库。
 - 请遵守 B 站服务条款，不要把频率调得过低（`interval_minutes` 建议 ≥ 10）。
 
@@ -689,6 +651,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v2.0.0**：**删掉整个 QQ 小程序卡片功能**（`[card]` 整节配置、`card_caption`、`share_card.py` 与所有卡片回退 / 回查逻辑）。QQ 对协议端发的 ark 有客户端版本校验，一律在服务端降级成「发送者版本过低，无法展示内容」，留着只会多一堆看不懂的开关。分享形式现在只有 `text` / `image` 两种；配置里如果还留着 `style = card`，2.0.0 会自动按 `image` 发并在日志里提示一次。
 - **v1.7.0**：删掉「赤石视频」整块（`bili_shiwei` 工具、`[shiwei]` 配置节、`share_shiwei` 与相关冷却常量）；想整活直接让麦麦用 `bili_search` 自己搜
 - **v1.6.6**：随口一句改成按概率触发（`[share].casual_chance`，0~100 %），没抽中的那几次只发标题链接
 - **v1.6.5**：图文分享改成「先发封面 + 链接（合成一条），再把随口一句单独发一条」—— 随口一句不再掺进链接那条；卡片回退时不会重复发前言
@@ -712,7 +675,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 - **v1.1.0**：`bili_read` 增加 `detail="full"` 深度读——字幕带 `[分:秒]` 时间轴、弹幕按分钟聚合成时间线、热评 15 条、分P 全列、简介 800 字，输出上限 9000 字；同时修掉弹幕时间戳解析错误（以前全挤在 00:00）。
 - **v1.0.1**：修服务器 IP 撞上 B 站风控时读视频报 HTTP 412 的问题（自动申请 buvid Cookie 重试 + 可操作报错）。
 - **v1.0.0**：首个发布版本（本项目从上游「麦麦刷B站」2.1.2 起独立维护，版本号重新从 1.0.0 计；插件 id 不变，可直接覆盖升级）。
-  - **定时刷 B 站**：抓热门 / 排行榜 / 搜索候选，LLM 按当前会话兴趣挑选后生成分享卡片发到白名单会话；兴趣可手写、可从聊天自动提取、可用人设初始兴趣兜底。
+  - **定时刷 B 站**：抓热门 / 排行榜 / 搜索候选，LLM 按当前会话兴趣挑选后生成分享内容发到白名单会话；兴趣可手写、可从聊天自动提取、可用人设初始兴趣兜底。
   - **能读视频**：`bili_read` 工具，支持链接 / BV / av / 短链，返回简介、分P、CC 字幕、热评、弹幕采样；白名单会话里贴链接还会自动读进上下文。
   - **稳定性**：包内相对导入 + 顶层导入兜底、`get_components()` 提升 `chat_scope`、`bili_read` 对 Planner 直接可见（不再被派给子代理空转等待）。
   - 上游 2.x 的历史记录见 [CHANGELOG-upstream.md](CHANGELOG-upstream.md)，本版完整说明见 [CHANGELOG.md](CHANGELOG.md)。

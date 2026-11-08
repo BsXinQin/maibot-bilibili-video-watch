@@ -5,6 +5,21 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [2.0.0] - 2026-11-08
+
+### 移除
+
+- 整个 QQ 小程序卡片功能：`[card]` 整节配置（api_base / access_token / card_kind / use_official_ark / verify_send / verify_history / miniapp_forward / fallback_to_image / card_auto_disable / timeout_seconds）、`[share].card_caption`、`share_card.py`、`_send_card()` / `_verify_card()` 与卡片状态记忆（`card_state.json`）。
+- `[share].style` 现在只接受 `text` / `image`；配置里残留 `card` 时按 `image` 分享，并在日志里提示一次。
+
+### 为什么
+
+QQ 对协议端发的 ark 有「发送方客户端版本」校验，一律在服务端降级成「发送者版本过低，无法展示内容」——miniapp / tuwen / news 三种结构实测全部失败，留着只会多一堆看不懂的开关。分享带图的稳定形态就是「封面图 + 文字」。
+
+### 升级说明
+
+旧配置里的 `[card]` 节与 `card_caption` 会被配置模型忽略（多余字段不报错），也可以手动删掉；`style = "card"` 建议改成 `image`。
+
 ## [1.7.0] - 2026-11-08
 
 ### 移除

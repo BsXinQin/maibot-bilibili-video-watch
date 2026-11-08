@@ -10,7 +10,7 @@
 # 启用插件 —— 是否启用沁の刷B站视频
 enabled = true
 # 配置版本
-config_version = "1.7.0"
+config_version = "2.0.0"
 
 [schedule]
 # 刷取间隔（分钟） —— 每隔多少分钟自动刷一次 B 站：1=每分钟，60=每小时，1440=每天（可调范围 1 分钟 ~ 24 小时）
@@ -233,10 +233,8 @@ style_hint = ""
 cache_seconds = 120
 
 [share]
-# 分享形式 —— text=一条文字；image=封面图 + 文字；card=QQ 小程序卡片（需要在下面 [card] 里填地址，发不出去会自动退回图文）
+# 分享形式 —— text=一条文字（【标题】链接）；image=封面图 + 文字 + 链接
 style = "text"
-# 卡片前先发一句话 —— 分享形式为 card 时，是否在卡片前面先发那句随口话
-card_caption = true
 # 随口一句字数上限 —— 分享时那句随口话的最大字数（超长会截断）
 casual_max_chars = 60
 # 每次分享带那句随口话的概率（%）：100 每次都带，0 从不带，60 就是六成次数带
@@ -247,28 +245,6 @@ include_stats_line = false
 vd_source = ""
 # 封面图和链接合成一条消息 —— 开=用 send.hybrid 把封面图和【标题】链接发成同一条（更好看）；关=先图后字两条；宿主不支持时会自动退回两条
 single_message = true
-
-[card]
-# OneBot HTTP 地址 —— QQ 客户端（NapCat / SnowLuma）的 HTTP 接口地址，默认端口都是 3000，如 http://172.23.0.2:3000；只发文字时不用填
-api_base = ""
-# 访问令牌 —— 上面那个接口的 Token，没设置就留空；SnowLuma 的 token 在它配置的 onebot_<uin>.json 里（accessToken）
-access_token = ""
-# 卡片类型 —— miniapp=小程序卡片（按手机上转发出来的真卡片逐字段复刻：appID / view_<分享模板ID>）；tuwen=原生图文 Ark 卡片（SnowLuma 专有，做退路）；news=通用图文卡片（结构最简单）。注意：QQ 对协议端发的 ark 有客户端版本校验，很多号会统一降级成「发送者版本过低」，三种都可能发不出——发不出会自动退回图文，见 card_auto_disable
-card_kind = "miniapp"
-# 用官方通道补空字段 —— miniapp 时再向 QQ 客户端要一份卡片（SnowLuma 的 get_mini_app_ark），只用来补本地模板里空着的字段（url / icon / token），结构永远用本地真模板；NapCat 没有这个动作就纯本地拼卡
-use_official_ark = true
-# 带 bthirdappforward 转发标记 —— 手机上那张卡是「转发」出来的所以带这个标记；但走协议直发时带上它，SnowLuma 常报 delivery was not confirmed（QQ 没给消息回执）。默认关；无论开关，发失败都会自动换另一种再试一次
-miniapp_forward = false
-# 没回执时回查群历史 —— SnowLuma 常报 delivery was not confirmed（QQ 只回 result=0、不给 message_id）。打开后先拉一次群历史：卡片其实已经在群里就算发送成功、不再重发；看不到才换另一种卡片重试。关掉就会直接换版重试，可能重复发两条
-verify_history = true
-# 失败退回图文 —— 卡片发不出去时，是否改发「封面图 + 文字」
-fallback_to_image = true
-# 回查并在被降级时改发图文 —— 发完用 get_msg 看这条消息，被 QQ 换成「发送者版本过低」就撤回，再改发封面图 + 文字
-verify_send = true
-# 卡片被降级过就记住 —— 某种卡片样式被 QQ 降级成「发送者版本过低，无法展示内容」之后，记住这个结果，以后的分享直接用封面图 + 文字，不再每条都先发一份兜底文本。想再试一次：删掉插件数据目录里的 card_state.json，或临时关掉这个开关
-card_auto_disable = true
-# 超时（秒） —— 请求 OneBot 接口的超时秒数
-timeout_seconds = 8.0
 
 [read]
 # 启用读视频 —— 启用 bili_read 工具（麦麦能真正读到视频的简介、分P、字幕、热评、弹幕）

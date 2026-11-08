@@ -80,11 +80,6 @@ try:  # 宿主正常按包加载插件
         select_comments,
     )
     from .persona import PersonaProvider
-    from .share_card import build_payload as build_card_payload
-    from .share_card import check_card_message, fetch_mini_app_ark, recall_message
-    from .share_card import fill_miniapp_payload
-    from .share_card import miniapp_variants
-    from .share_card import send_json_card, send_json_card_ex, send_tuwen_ark
     from .store import COOLDOWN_ACTIVE_SEARCH, SeenStore
     from .textfilter import filter_comments, filter_danmaku
 except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回同级导入
@@ -134,19 +129,12 @@ except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回
         select_comments,
     )
     from persona import PersonaProvider
-    from share_card import build_payload as build_card_payload
-    from share_card import check_card_message, fetch_mini_app_ark, recall_message
-    from share_card import fill_miniapp_payload
-    from share_card import miniapp_variants
-    from share_card import send_json_card, send_json_card_ex, send_tuwen_ark
     from store import COOLDOWN_ACTIVE_SEARCH, SeenStore
     from textfilter import filter_comments, filter_danmaku
 
 logger = logging.getLogger("plugin.bilibili_interest_share")
 
 PLUGIN_ID = "github.BsXinQin.bilibili_video_watch"
-# card_kind 里这几个值走「原生图文 Ark」通道（不依赖小程序）
-TUWEN_KINDS = ("tuwen", "tuwen_ark", "ark")
 _MAX_HISTORY_ITEMS = 8
 # 封面图最大 8MB：超过就不发图，直接退回文字（避免把分享卡在这一步）
 _MAX_COVER_BYTES = 8 * 1024 * 1024
@@ -1801,10 +1789,14 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
     # -- 发送 ----------------------------------------------------------
 
     def _share_style(self) -> str:
-        """当前的分享形式：text / image / card；非法值一律按 text 处理。"""
+        """当前的分享形式：text / image；非法值一律按 text 处理。"""
 
         style = str(getattr(self.config.share, "style", "text") or "text").strip().lower()
-        return style if style in ("text", "image", "card") else "text"
+        if style == "card":
+            logger.warning("分享形式 card 已在 2.0.0 移除，这次按 image（封面图 + 文字）发")
+            return "image"
+        return style if style in ("text", "image") else "text"
+
     def _roll_casual(self) -> bool:
         """这次分享要不要带那句随口话：按 [share].casual_chance 掷一次骰子。"""
 
@@ -1985,181 +1977,6 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 return route
         return {}
 
-    async def _send_card(self, stream_id: str, video: Video, *, caption: str = "") -> bool:
-        """把分享发成 QQ 卡片（小程序卡片 / 原生图文 Ark），直连 QQ 客户端的 OneBot HTTP。"""
-
-        self._card_caption_sent = False
-        card_cfg = getattr(self.config, "card", None)
-        api_base = str(getattr(card_cfg, "api_base", "") or "").strip()
-        if not api_base:
-            logger.info("分享形式是 card，但「卡片直发」里没填 OneBot HTTP 地址，改发图文")
-            return False
-        route = self._route_for(stream_id)
-        group_id = route.get("group_id", "")
-        user_id = route.get("user_id", "")
-        if not group_id and not user_id:
-            logger.info("拿不到会话 %s 的群号 / QQ 号，改发图文", stream_id)
-            return False
-        kind = str(getattr(card_cfg, "card_kind", "miniapp") or "miniapp").strip().lower()
-        if self._card_known_broken(kind):
-            logger.info(
-                "卡片样式 %s 上次被 QQ 降级成兜底文本，这次直接发图文（想再试一次就删掉 card_state.json）",
-                kind,
-            )
-            return False
-        token = str(getattr(card_cfg, "access_token", "") or "")
-        timeout = float(getattr(card_cfg, "timeout_seconds", 8.0) or 8.0)
-        desc = video.owner or video.description
-        if kind in TUWEN_KINDS:
-            if caption:
-                await self._send_text(stream_id, caption)
-            ok, detail, message_id = await send_tuwen_ark(
-                api_base,
-                token,
-                group_id=group_id,
-                user_id=user_id,
-                title=video.title,
-                desc=desc,
-                jump_url=video.url,
-                preview_url=video.cover,
-                timeout=timeout,
-            )
-            if not ok:
-                logger.warning("图文 Ark 分享失败（%s）：%s", video.bvid, detail)
-                return False
-            logger.info("已用图文 Ark 分享 %s：%s", video.bvid, detail)
-            return await self._verify_card(
-                api_base, token, message_id, timeout, video.bvid, kind
-            )
-        # 先按手机里那张真卡片的结构本地拼一份（appID / view_<模板ID> / config 齐全），
-        # 再用官方通道补空字段：结构永远是我们这份，官方只补 url、icon、token 之类。
-        payload = build_card_payload(
-            kind,
-            title=video.title,
-            jump_url=video.url,
-            cover=video.cover,
-            desc=desc,
-            pub_time=video.pubdate,
-            host_uin=route.get("account_id", ""),
-        )
-        if not payload:
-            logger.info("视频 %s 缺标题或链接，拼不出卡片，改发图文", video.bvid)
-            return False
-        if kind != "news" and bool(getattr(card_cfg, "use_official_ark", True)):
-            ark = await fetch_mini_app_ark(
-                api_base,
-                token,
-                title=video.title,
-                jump_url=video.url,
-                cover=video.cover,
-                desc=desc,
-                timeout=timeout,
-            )
-            payload = fill_miniapp_payload(payload, ark)
-        alt_payloads = []
-        if kind != "news":
-            # 「带不带 bthirdappforward」两种版本都准备好：默认先发配置里的那种，
-            # QQ 没给回执（SnowLuma: delivery was not confirmed）就自动换另一种重发。
-            variants = miniapp_variants(
-                payload, forward=bool(getattr(card_cfg, "miniapp_forward", False))
-            )
-            if variants:
-                payload = variants[0]
-                alt_payloads = variants[1:]
-        if caption:
-            await self._send_text(stream_id, caption)
-            self._card_caption_sent = True
-        ok, detail, message_id = await send_json_card_ex(
-            api_base,
-            token,
-            group_id=group_id,
-            user_id=user_id,
-            payload=payload,
-            timeout=timeout,
-            alt_payloads=alt_payloads,
-            verify_history=bool(getattr(card_cfg, "verify_history", True)),
-        )
-        if not ok:
-            logger.warning("卡片分享失败（%s）：%s", video.bvid, detail)
-            return False
-        logger.info("已用卡片分享 %s：%s", video.bvid, detail)
-        return await self._verify_card(
-                api_base, token, message_id, timeout, video.bvid, kind
-            )
-
-    # --- 卡片可用性记忆：被 QQ 降级过的样式不再每条都试，免得群里多一份兜底文本 ---
-
-    def _card_state_path(self) -> Optional[Path]:
-        if self._data_dir is None:
-            return None
-        return self._data_dir / "card_state.json"
-
-    def _read_card_state(self) -> Dict[str, Any]:
-        path = self._card_state_path()
-        if path is None or not path.is_file():
-            return {}
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-        return data if isinstance(data, dict) else {}
-
-    def _write_card_state(self, *, kind: str, works: bool, detail: str = "") -> None:
-        path = self._card_state_path()
-        if path is None:
-            return
-        payload = {
-            "kind": kind,
-            "works": bool(works),
-            "detail": str(detail)[:300],
-            "checked_at": int(time.time()),
-        }
-        try:
-            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        except Exception as exc:
-            logger.debug("写卡片状态失败：%s", exc)
-
-    def _card_known_broken(self, kind: str) -> bool:
-        """这个卡片样式之前被 QQ 降级过吗？降级过就别再发（避免群里留下一份兜底文本）。"""
-
-        card_cfg = getattr(self.config, "card", None)
-        if not bool(getattr(card_cfg, "card_auto_disable", True)):
-            return False
-        state = self._read_card_state()
-        if not state:
-            return False
-        if str(state.get("kind", "")) != str(kind):
-            return False
-        return state.get("works") is False
-
-    async def _verify_card(
-        self,
-        api_base: str,
-        token: str,
-        message_id: str,
-        timeout: float,
-        bvid: str,
-        kind: str = "miniapp",
-    ) -> bool:
-        """发出后回查：被 QQ 降级成兜底文本就撤回，返回 False 让调用方改发图文。"""
-
-        if not message_id:
-            return True
-        card_cfg = getattr(self.config, "card", None)
-        if not bool(getattr(card_cfg, "verify_send", True)):
-            return True
-        verdict = await check_card_message(api_base, token, message_id, timeout=min(timeout, 5.0))
-        if verdict is False:
-            logger.warning(
-                "卡片被 QQ 降级成文本（%s，message_id=%s），撤回并改发图文", bvid, message_id
-            )
-            await recall_message(api_base, token, message_id, timeout=min(timeout, 5.0))
-            self._write_card_state(kind=kind, works=False, detail="被 QQ 降级成兜底文本")
-            return False
-        if verdict is True:
-            self._write_card_state(kind=kind, works=True, detail="卡片正常落库")
-        return True
-
     async def _send_image_parts(
         self,
         stream_id: str,
@@ -2203,7 +2020,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         video: Video,
         narrative: str,
     ) -> bool:
-        """发送分享：按配置选文字 / 封面图文 / 小程序卡片，失败逐级回退。"""
+        """发送分享：按配置选文字 / 封面图文，失败逐级回退。"""
 
         config = self.config
         line = (narrative or "").strip()
@@ -2220,16 +2037,6 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         caption = f"{line} {header}" if line else header
         message = f"{caption}\n{stats}" if stats else caption
         style = self._share_style()
-        if style == "card":
-            card_caption = line if getattr(config.share, "card_caption", True) else ""
-            if await self._send_card(stream_id, video, caption=card_caption):
-                return True
-            if getattr(config.card, "fallback_to_image", True):
-                # 随口一句已经当卡片前言发过了，回退时别再发一遍
-                rest = "" if getattr(self, "_card_caption_sent", False) else line
-                if await self._send_image_parts(stream_id, video, rest, header, stats):
-                    return True
-            return await self._send_text(stream_id, message)
         if style == "image":
             if await self._send_image_parts(stream_id, video, line, header, stats):
                 return True
