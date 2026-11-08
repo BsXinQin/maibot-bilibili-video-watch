@@ -10,8 +10,11 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -20,7 +23,21 @@ logger = logging.getLogger("plugin.bilibili_interest_share.share_card")
 
 # B 站小程序的 AppID（手机上把 B 站视频转发给好友时用的就是它）
 BILIBILI_APPID = 1109937557
-# 卡片左侧小图标；拿不到也不影响卡片显示
+# 卡片外壳：外层「QQ 小程序」容器的 AppID（不是 B 站那个，取自手机真实卡片）
+BILIBILI_MINIAPP_APPID = "100951776"
+# B 站小程序分享模板 ID；卡片里的 view 就由它拼成 view_<模板ID>
+BILIBILI_MINIAPP_SHARE_TEMPLATE_ID = "8C8E89B49BE609866298ADDFF2DBABA4"
+BILIBILI_MINIAPP_VIEW = "view_" + BILIBILI_MINIAPP_SHARE_TEMPLATE_ID
+# 卡片左侧小图标（腾讯小程序图标 CDN，手机卡片用的就是这张）
+BILIBILI_MINIAPP_ICON = (
+    "http://miniapp.gtimg.cn/public/appicon/432b76be3a548fc128acaa6c1ec90131_200.jpg"
+)
+# 分享场景值，手机卡片固定 1036
+BILIBILI_MINIAPP_SCENE = 1036
+# 合法的模板 view，形如 view_8C8E89B4...
+_VIEW_RE = re.compile(r"^view_[0-9A-Fa-f]{16,40}$")
+
+# 通用小图标；拿不到也不影响卡片显示
 BILIBILI_ICON = "https://www.bilibili.com/favicon.ico"
 # 标题/简介的长度上限（太长 QQ 会截断，先自己截干净）
 MAX_TITLE_CHARS = 60
@@ -70,86 +87,127 @@ def clean_text(value: Any, limit: int) -> str:
     return text
 
 
-def _miniapp_detail(
-    *,
-    title: str,
-    jump_url: str,
-    cover: str,
-    desc: str = "",
-    tag: str = "哔哩哔哩",
-    pub_time: int = 0,
-    icon: str = BILIBILI_ICON,
-) -> Dict[str, Any]:
-    detail: Dict[str, Any] = {
-        "title": title,
-        "desc": desc or tag,
-        "icon": icon,
-        "preview": cover,
-        "url": jump_url,
-        "appid": BILIBILI_APPID,
-        "scene": 1036,
-        "hostType": 0,
-        "shareTemplateId": "0",
-        "qqdocurl": jump_url,
-        "pubTime": int(pub_time or 0),
-        "type": 0,
-        "appType": 0,
-        "uin": 0,
-    }
-    if tag:
-        detail["tag"] = tag
-    return detail
+def _share_path_hash(text: str) -> str:
+    """给卡片里的 m.q.qq.com/a/s/<32位> 跳转路径生成稳定后缀。
+
+    手机端的这个串由服务端下发，本地只能造一个稳定值；客户端真正跳转用的是
+    qqdocurl，所以做摘要即可。
+    """
+
+    return hashlib.md5((text or "").encode("utf-8")).hexdigest()
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
 
 
 def build_miniapp_payload(
     *,
     title: str,
     jump_url: str,
-    cover: str,
+    cover: str = "",
     desc: str = "",
     tag: str = "哔哩哔哩",
     pub_time: int = 0,
-    icon: str = BILIBILI_ICON,
+    icon: str = BILIBILI_MINIAPP_ICON,
+    host_uin: Any = 0,
+    host_nick: str = "",
 ) -> Dict[str, Any]:
-    """拼 1 张「B 站小程序」卡片（和手机里转发出来的一样）。
+    """按手机上那张真卡片的结构拼 1 张「B 站小程序」卡片。
 
-    缺标题、链接或封面时返回 ``{}``——调用方据此退回图文。
+    关键点都是从真实卡片里抄的：外层 appID、view_<分享模板ID>、
+    config.forward、bthirdappforward，以及 meta.detail_1 的
+    appid / shareTemplateId / qqdocurl。少任何一项 QQ 都可能
+    把它当非法卡片丢掉（表现为「小程序已下架」）。
+
+    缺标题或链接时返回 {}——调用方据此退回图文。
     """
 
     clean_title = clean_text(title, MAX_TITLE_CHARS)
     clean_url = (jump_url or "").strip()
-    clean_cover = normalize_cover(cover)
-    if not clean_title or not clean_url or not clean_cover:
+    if not clean_title or not clean_url:
         return {}
-    ctime = int(pub_time or 0)
+    clean_cover = normalize_cover(cover)
+    clean_tag = clean_text(tag, MAX_TITLE_CHARS) or "哔哩哔哩"
+    ctime = _safe_int(pub_time)
+
+    detail: Dict[str, Any] = {
+        "appid": str(BILIBILI_APPID),
+        "preview": clean_cover,
+        "shareTemplateData": {},
+        "gamePointsUrl": "",
+        "gamePoints": "",
+        "url": "m.q.qq.com/a/s/" + _share_path_hash(clean_url),
+        "appType": 0,
+        "desc": clean_text(desc or clean_title, MAX_DESC_CHARS),
+        "title": clean_tag,
+        "scene": BILIBILI_MINIAPP_SCENE,
+        "host": {"uin": _safe_int(host_uin), "nick": clean_text(host_nick, 40)},
+        "icon": icon,
+        "shareTemplateId": BILIBILI_MINIAPP_SHARE_TEMPLATE_ID,
+        "qqdocurl": clean_url,
+        "showLittleTail": "",
+        "shareOrigin": 0,
+    }
     return {
         "app": "com.tencent.miniapp_01",
-        "desc": "0",
-        "view": "viewMultiMsg",
         "ver": "0.0.0.1",
-        "prompt": "[" + tag + "]" + clean_title,
+        "appID": BILIBILI_MINIAPP_APPID,
+        "view": BILIBILI_MINIAPP_VIEW,
+        "prompt": "[QQ小程序]" + clean_title,
+        "desc": "",
         "config": {
-            "ctime": ctime,
-            "forward": True,
-            "type": "normal",
-            "autoSize": True,
             "height": 0,
+            "forward": 1,
+            "ctime": ctime,
             "width": 0,
+            "type": "normal",
+            "token": "",
+            "autoSize": 0,
         },
-        "meta": {
-            "detail_1": _miniapp_detail(
-                title=clean_title,
-                jump_url=clean_url,
-                cover=clean_cover,
-                desc=clean_text(desc, MAX_DESC_CHARS),
-                tag=tag,
-                pub_time=ctime,
-                icon=icon,
-            )
-        },
-        "extra": {"app_type": 0, "appid": BILIBILI_APPID, "uin": 0},
+        "meta": {"detail_1": detail},
+        "bthirdappforward": True,
+        "bthirdappforwardforbackendswitch": True,
     }
 
+
+def _deep_fill(base: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
+    """把 extra 里「base 还空着」的字段补上（就地修改 base）。"""
+
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_fill(base[key], value)
+            continue
+        if base.get(key) in ("", None, {}, []):
+            base[key] = value
+    return base
+
+
+def fill_miniapp_payload(
+    payload: Dict[str, Any], ark: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """用官方通道（get_mini_app_ark）返回的卡片补全本地模板。
+
+    只补空白字段，绝不覆盖我们自己拼出来的 appID / view / config；
+    官方给了合法的 view_<模板ID> 与 appID 时才让它们接管（那种情况说明
+    对端给了真正可解析的小程序模板）。
+    """
+
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    if not isinstance(ark, dict) or not ark:
+        return payload
+    merged = copy.deepcopy(payload)
+    _deep_fill(merged, ark)
+    view = str(ark.get("view") or "")
+    app_id = str(ark.get("appID") or "").strip()
+    if app_id and _VIEW_RE.match(view):
+        merged["view"] = view
+        merged["appID"] = app_id
+    return merged
 
 def build_news_payload(
     *,
@@ -200,22 +258,28 @@ def build_payload(
     desc: str = "",
     tag: str = "哔哩哔哩",
     pub_time: int = 0,
+    host_uin: Any = 0,
+    host_nick: str = "",
 ) -> Dict[str, Any]:
-    """按 ``kind`` 选卡片样式；首选样式拼不出来就换另一种。"""
+    """按 kind 选卡片样式；首选样式拼不出来就换另一种。"""
 
     wanted = (kind or "miniapp").strip().lower()
     builders = (build_news_payload, build_miniapp_payload)
     if wanted != "news":
         builders = (build_miniapp_payload, build_news_payload)
     for builder in builders:
-        payload = builder(
-            title=title,
-            jump_url=jump_url,
-            cover=cover,
-            desc=desc,
-            tag=tag,
-            pub_time=pub_time,
-        )
+        kwargs: Dict[str, Any] = {
+            "title": title,
+            "jump_url": jump_url,
+            "cover": cover,
+            "desc": desc,
+            "tag": tag,
+            "pub_time": pub_time,
+        }
+        if builder is build_miniapp_payload:
+            kwargs["host_uin"] = host_uin
+            kwargs["host_nick"] = host_nick
+        payload = builder(**kwargs)
         if payload:
             return payload
     return {}

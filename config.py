@@ -43,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.5.3",
+        default="1.5.4",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -704,19 +704,21 @@ class CardConfig(PluginConfigBase):
     card_kind: str = Field(
         default="miniapp",
         description=(
-            "卡片样式：miniapp=B 站小程序卡片（和手机上分享一模一样，最像；"
-            "B 站小程序在部分 QQ 版本里会显示「小程序已下架」）；"
-            "tuwen=原生图文 Ark 卡片（不依赖小程序，QQ 各版本都能渲染，像一条分享卡片）；"
+            "卡片样式：miniapp=B 站小程序卡片（按手机上转发出来的真卡片逐字段复刻："
+            "appID / view_<分享模板ID> / bthirdappforward，不会再出现「小程序已下架」）；"
+            "tuwen=原生图文 Ark 卡片（不依赖小程序，SnowLuma 专有，可做退路）；"
             "news=通用图文卡片（structmsg，老版本 QQ 也能显示）"
         ),
-        json_schema_extra={"label": "卡片样式（miniapp / tuwen / news）", "placeholder": "tuwen"},
+        json_schema_extra={"label": "卡片样式（miniapp / tuwen / news）", "placeholder": "miniapp"},
     )
     use_official_ark: bool = Field(
         default=True,
         description=(
-            "miniapp 样式是否先用 QQ 客户端自己生成卡片（SnowLuma 的 get_mini_app_ark，用官方通道，手机上能正常显示；NapCat 没这个动作会自动退回本地拼的卡片）"
+            "miniapp 样式是否再向 QQ 客户端要一份卡片（SnowLuma 的 get_mini_app_ark），"
+            "只用来补本地模板里空着的字段（url / icon / token）；卡片结构永远用本地真模板，"
+            "NapCat 没这个动作就纯本地拼卡"
         ),
-        json_schema_extra={"label": "优先用官方通道生成卡片"},
+        json_schema_extra={"label": "用官方通道补空字段"},
     )
     fallback_to_image: bool = Field(
         default=True,

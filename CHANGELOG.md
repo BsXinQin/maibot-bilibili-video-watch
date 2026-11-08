@@ -5,6 +5,29 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.5.4] - 2026-11-08
+
+小程序卡片改成按「手机里那张真卡片」逐字段复刻，不再靠猜。
+
+### 修复
+
+- **「小程序已下架」**：用户在 QQ 里自己转发 B 站视频，用 `get_msg` 取出原始 `json`，据此发现之前发出的卡片缺了外层 `appID`、`view` 写成了通用的 `viewMultiMsg`、也没有 `bthirdappforward`。现在 `build_miniapp_payload()` 直接复刻真结构：
+  - 外层：`app=com.tencent.miniapp_01`、`ver=0.0.0.1`、`appID=100951776`、`view=view_8C8E89B49BE609866298ADDFF2DBABA4`、`prompt=[QQ小程序]<标题>`、`desc=""`；
+  - `config`：`height/width=0`、`forward=1`、`type=normal`、`token=""`、`autoSize=0`、`ctime=发布时间`；
+  - `meta.detail_1`：`appid="1109937557"`（字符串）、`shareTemplateId`、`qqdocurl`、`url=m.q.qq.com/a/s/<md5>`、`preview`、`icon`（换成腾讯小程序图标 CDN 的那张）、`scene=1036`、`shareOrigin=0`、`showLittleTail=""`、`shareTemplateData={}`、`host={uin,nick}`；
+  - 顶层补 `bthirdappforward=true`、`bthirdappforwardforbackendswitch=true`。
+- `miniapp` **不再强制要封面**：结构齐全即可出卡，没封面就是预览图空着。
+
+### 新增
+
+- `share_card.fill_miniapp_payload(payload, ark)`：官方通道（SnowLuma `get_mini_app_ark`）返回的卡片改成**只补空字段**（`config.token`、`url`、`icon` 等），`appID` / `view` / `config` 永远用本地真模板；只有官方同时给出 `appID` 与合法的 `view_<模板ID>` 时才让它接管。`_send_card()` 的取卡顺序也随之改成「先本地拼 → 官方补」。
+- `build_payload()` / `build_miniapp_payload()` 支持 `host_uin` / `host_nick`，插件会把路由里的机器人账号填进卡片 `host.uin`（非数字会安全退回 0）。
+- 常量 `BILIBILI_MINIAPP_APPID`、`BILIBILI_MINIAPP_SHARE_TEMPLATE_ID`、`BILIBILI_MINIAPP_VIEW`、`BILIBILI_MINIAPP_ICON`、`BILIBILI_MINIAPP_SCENE`。
+
+### 变更
+
+- `_manifest.json` 的 `version` 与 `config.py` 的 `config_version` 升到 `1.5.4`。
+- 测试：`tests/test_share_style.py` 新增/改写 12 个用例（真卡片结构逐项断言、无封面可出卡、缺标题/链接才返回空、`host` 字段、`fill_miniapp_payload` 不覆盖已有字段 / 接受合法模板 / 空输入、`miniapp` 优先于 `news`、机器人号进 `host.uin`）。
 ## [1.5.3] - 2026-11-08
 
 小程序卡片被 QQ 判成「小程序已下架」时，可以改用原生「图文 Ark」卡片。

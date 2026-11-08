@@ -117,38 +117,118 @@ class ShareCardTests(unittest.TestCase):
         # 相对路径没法直接引用，当作没有封面（会退回图文）
         self.assertEqual(self.card.normalize_cover("/bfs/a.jpg"), "")
 
-    def test_miniapp_payload(self):
+    def test_miniapp_payload_mirrors_real_card(self):
+        # 结构逐项对齐手机上转发出来的真卡片（2026-11-08 抓包）
         payload = _cover_ready_payload(self.card)
         self.assertEqual(payload["app"], "com.tencent.miniapp_01")
-        self.assertEqual(payload["view"], "viewMultiMsg")
-        detail = payload["meta"]["detail_1"]
-        self.assertEqual(detail["url"], "https://www.bilibili.com/video/BV1TEST")
-        self.assertEqual(detail["preview"], "https://i0.hdslb.com/bfs/archive/cover.jpg")
-        self.assertEqual(detail["appid"], self.card.BILIBILI_APPID)
+        self.assertEqual(payload["ver"], "0.0.0.1")
+        self.assertEqual(payload["appID"], "100951776")
+        self.assertEqual(payload["view"], "view_8C8E89B49BE609866298ADDFF2DBABA4")
+        self.assertEqual(payload["prompt"], "[QQ小程序]【测试】原神新版本")
+        self.assertEqual(payload["config"]["forward"], 1)
+        self.assertEqual(payload["config"]["type"], "normal")
         self.assertEqual(payload["config"]["ctime"], 1700000000)
-        self.assertEqual(payload["extra"]["appid"], self.card.BILIBILI_APPID)
+        self.assertTrue(payload["bthirdappforward"])
+        self.assertTrue(payload["bthirdappforwardforbackendswitch"])
+        detail = payload["meta"]["detail_1"]
+        self.assertEqual(detail["appid"], str(self.card.BILIBILI_APPID))
+        self.assertEqual(detail["title"], "哔哩哔哩")
+        self.assertEqual(detail["desc"], "测试UP")
+        self.assertEqual(detail["qqdocurl"], "https://www.bilibili.com/video/BV1TEST")
+        self.assertTrue(detail["url"].startswith("m.q.qq.com/a/s/"))
+        self.assertEqual(len(detail["url"].split("/")[-1]), 32)
+        self.assertEqual(detail["preview"], "https://i0.hdslb.com/bfs/archive/cover.jpg")
+        self.assertEqual(detail["scene"], 1036)
+        self.assertEqual(
+            detail["shareTemplateId"], self.card.BILIBILI_MINIAPP_SHARE_TEMPLATE_ID
+        )
+        self.assertEqual(detail["icon"], self.card.BILIBILI_MINIAPP_ICON)
+        self.assertEqual(detail["host"], {"uin": 0, "nick": ""})
+        self.assertNotIn("extra", payload)
 
-    def test_miniapp_requires_cover(self):
+    def test_miniapp_allows_missing_cover(self):
+        # 结构齐全就不再强制要封面：没封面照样能出一张卡，只是预览图为空
         payload = self.card.build_miniapp_payload(
             title="标题",
             jump_url="https://www.bilibili.com/video/BV1TEST",
             cover="",
         )
-        self.assertEqual(payload, {})
+        self.assertEqual(payload["app"], "com.tencent.miniapp_01")
+        self.assertEqual(payload["meta"]["detail_1"]["preview"], "")
+
+    def test_miniapp_requires_title_and_url(self):
+        self.assertEqual(
+            self.card.build_miniapp_payload(title="", jump_url="https://b23.tv/x"), {}
+        )
+        self.assertEqual(
+            self.card.build_miniapp_payload(title="标题", jump_url="  "), {}
+        )
+
+    def test_miniapp_host_fields(self):
+        payload = self.card.build_miniapp_payload(
+            title="标题",
+            jump_url="https://www.bilibili.com/video/BV1TEST",
+            host_uin="425030036",
+            host_nick="心沁",
+        )
+        self.assertEqual(
+            payload["meta"]["detail_1"]["host"], {"uin": 425030036, "nick": "心沁"}
+        )
+        # 非数字账号不会炸，退回 0
+        payload = self.card.build_miniapp_payload(
+            title="标题", jump_url="https://www.bilibili.com/video/BV1TEST", host_uin="abc"
+        )
+        self.assertEqual(payload["meta"]["detail_1"]["host"]["uin"], 0)
+
+    def test_fill_miniapp_payload_keeps_our_structure(self):
+        base = _cover_ready_payload(self.card)
+        # 官方通道返回的是通用 view，不能拿它覆盖真模板
+        ark = {
+            "app": "com.tencent.miniapp_01",
+            "view": "viewMultiMsg",
+            "config": {"token": "c7d4d673130077094e809dbf28efd138"},
+            "meta": {"detail_1": {"url": "m.q.qq.com/a/s/abc", "icon": "http://x/i.jpg"}},
+        }
+        merged = self.card.fill_miniapp_payload(base, ark)
+        self.assertEqual(merged["view"], base["view"])
+        self.assertEqual(merged["appID"], base["appID"])
+        # 官方给的 token 补进空字段，预览图不被覆盖
+        self.assertEqual(merged["config"]["token"], "c7d4d673130077094e809dbf28efd138")
+        # 已经填好的字段一律不让官方覆盖（icon / 预览图保持我们自己的）
+        self.assertEqual(merged["meta"]["detail_1"]["icon"], base["meta"]["detail_1"]["icon"])
+        self.assertEqual(
+            merged["meta"]["detail_1"]["preview"],
+            "https://i0.hdslb.com/bfs/archive/cover.jpg",
+        )
+        # 原 payload 不被就地改动
+        self.assertEqual(base["config"]["token"], "")
+
+    def test_fill_miniapp_payload_accepts_real_template_ark(self):
+        base = _cover_ready_payload(self.card)
+        ark = {"view": "view_1111111111111111111111111111111A", "appID": "100951776"}
+        merged = self.card.fill_miniapp_payload(base, ark)
+        self.assertEqual(merged["view"], "view_1111111111111111111111111111111A")
+
+    def test_fill_miniapp_payload_handles_empty(self):
+        base = _cover_ready_payload(self.card)
+        self.assertEqual(self.card.fill_miniapp_payload(base, None), base)
+        self.assertEqual(self.card.fill_miniapp_payload(base, {}), base)
+        self.assertEqual(self.card.fill_miniapp_payload({}, {"app": "x"}), {})
 
     def test_build_payload_falls_back_to_news(self):
-        # 想要小程序卡片但没封面 → 自动换成通用图文卡片（仍然比纯文字好看）
+        # 缺标题/链接：两种卡片都拼不出来
+        payload = self.card.build_payload(
+            "miniapp", title="", jump_url="https://www.bilibili.com/video/BV1TEST"
+        )
+        self.assertEqual(payload, {})
+        # 能拼小程序卡时优先它，不再因为没封面退 news
         payload = self.card.build_payload(
             "miniapp",
             title="标题",
             jump_url="https://www.bilibili.com/video/BV1TEST",
             cover="",
         )
-        self.assertEqual(payload["app"], "com.tencent.structmsg")
-        self.assertEqual(
-            payload["meta"]["news"]["jumpUrl"],
-            "https://www.bilibili.com/video/BV1TEST",
-        )
+        self.assertEqual(payload["app"], "com.tencent.miniapp_01")
 
     def test_news_first_when_configured(self):
         payload = self.card.build_payload(
@@ -704,8 +784,10 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls["ark"][0]["title"], video.title)
         self.assertEqual(calls["ark"][0]["jump_url"], video.url)
         self.assertEqual(calls["ark"][0]["cover"], video.cover)
-        # 发出去的是官方通道生成的那张卡，不是本地拼的
-        self.assertEqual(calls["send"][0]["payload"], ark)
+        # 结构用本地真模板，官方通道只补空白字段（这里没补到 view）
+        payload = calls["send"][0]["payload"]
+        self.assertEqual(payload["appID"], "100951776")
+        self.assertEqual(payload["view"], "view_8C8E89B49BE609866298ADDFF2DBABA4")
 
     async def test_card_style_falls_back_to_local_payload(self):
         plugin = self._plugin(
@@ -721,26 +803,43 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls["ark"]), 1)
         payload = calls["send"][0]["payload"]
         self.assertEqual(payload["app"], "com.tencent.miniapp_01")
-        self.assertEqual(payload["view"], "viewMultiMsg")
+        self.assertEqual(payload["view"], "view_8C8E89B49BE609866298ADDFF2DBABA4")
         self.assertEqual(
             payload["meta"]["detail_1"]["preview"], "https://i0.hdslb.com/c.jpg"
         )
+        # 没有官方卡也能发：本地模板已经齐全
+        self.assertEqual(payload["meta"]["detail_1"]["appid"], "1109937557")
 
-    async def test_card_style_can_send_ark_without_cover(self):
-        # 本地拼卡片必须有封面，但官方通道只要标题 + 链接就能出卡
+    async def test_card_style_sends_without_cover(self):
+        # 结构齐全后不再强制要封面：没封面就发一张预览为空的卡
         plugin = self._plugin(
             share={"style": "card"},
             card={"api_base": "http://172.23.0.2:3000"},
         )
         plugin._register_stream_route("stream-1", group_id="123456")
         video = make_video(self.video_module)  # 没有封面
-        ark = {"app": "com.tencent.miniapp_01", "view": "viewMultiMsg"}
-        calls = self._stub_card(ark=ark)
+        calls = self._stub_card(ark=None)
 
         ok = await plugin._send_parts("stream-1", video, "看看")
         self.assertTrue(ok)
         self.assertEqual(len(calls["send"]), 1)
-        self.assertEqual(calls["send"][0]["payload"], ark)
+        payload = calls["send"][0]["payload"]
+        self.assertEqual(payload["appID"], "100951776")
+        self.assertEqual(payload["meta"]["detail_1"]["preview"], "")
+
+    async def test_card_style_passes_bot_uin_into_host(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456", account_id="425030036")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        calls = self._stub_card(ark=None)
+
+        ok = await plugin._send_parts("stream-1", video, "看看")
+        self.assertTrue(ok)
+        host = calls["send"][0]["payload"]["meta"]["detail_1"]["host"]
+        self.assertEqual(host["uin"], 425030036)
 
     async def test_news_kind_ignores_official_ark(self):
         plugin = self._plugin(
