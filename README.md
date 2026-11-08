@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.5.2-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.5.3-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v1.5.2** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 小程序卡片（优先用 SnowLuma 官方通道出卡，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
+> 当前版本 **v1.5.3** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -171,7 +171,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.5.2"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.5.3"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -372,10 +372,11 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 | --- | --- | --- |
 | `api_base` | `""` | QQ 客户端的 OneBot HTTP 地址，如 `http://172.23.0.2:3000`；留空则卡片不启用（`card` 自动退回图文） |
 | `access_token` | `""` | 上面接口的 Token，要和 QQ 客户端里配的一致 |
-| `card_kind` | `"miniapp"` | `miniapp` = 小程序卡片（和手机上转发的一样）；`news` = 通用图文卡片（更老版本的 QQ 也能显示） |
+| `card_kind` | `"miniapp"` | `miniapp` = 小程序卡片（和手机上转发的一样，但 B 站小程序在部分 QQ 版本会显示「小程序已下架」）；`tuwen` = 原生图文 Ark 卡片（不依赖小程序，QQ 各版本都能渲染，推荐）；`news` = 通用图文卡片（更老版本的 QQ 也能显示） |
 | `use_official_ark` | `true` | `miniapp` 时先用 QQ 客户端自己生成卡片（SnowLuma 的 `get_mini_app_ark`，官方通道，手机上能正常显示）；NapCat 没这个动作会自动退回插件本地拼的卡片 |
 | `fallback_to_image` | `true` | 卡片发不出去时，改发「封面图 + 文字」 |
 | `verify_send` | `true` | 发完回查这条消息：被 QQ 降级成「发送者版本过低，无法展示内容」就撤回，并改发封面图 + 文字 |
+| `card_kind = "tuwen"` 额外说明 | — | 走 SnowLuma 的 `send_tuwen_ark`，参数是 `title` / `desc` / `summary` / `preview_url` / `jump_url`；NapCat 没这个动作，会自动退回图文 |
 | `timeout_seconds` | `8.0` | 请求 OneBot 接口的超时（`1`~`30` 秒） |
 
 怎么填 `api_base`：
@@ -704,6 +705,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v1.5.3**：新增 `card_kind = "tuwen"`——走 SnowLuma 的 `POST /send_tuwen_ark`，由 QQ 客户端渲染成原生「图文 Ark」卡片（封面 + 标题 + 简介 + 跳转），**不依赖任何小程序**，所以不会出现「小程序已下架」。`miniapp` 被 QQ 判成已下架时换成它即可；NapCat 没这个动作会自动退回图文。同时把「发完回查 + 被降级撤回」抽成 `_verify_card()`，两种卡片共用。
 - **v1.5.2**：小程序卡片改用 QQ 客户端**自己生成**——`miniapp` 先调 SnowLuma 的 `get_mini_app_ark`（内部走 `LightAppSvc.mini_app_share.AdaptShareInfo`），把它返回的卡片对象原样塞进 `json` 段发出，不再靠本地猜字段；NapCat 没这个动作会自动退回本地 payload。另外新增 `[card].verify_send`：发完用 `get_msg` 回查，发现被 QQ 降级成「发送者版本过低」就 `delete_msg` 撤回，再按 `fallback_to_image` 改发封面图 + 文字。顺带：没有封面的视频现在也能发 `miniapp` 卡（官方通道只要标题 + 链接）。
 - **v1.5.1**：卡片直发兼容 SnowLuma。SnowLuma 画像只认通用 `/send_msg` + `message_type`，插件在 `send_group_msg` / `send_private_msg` 被回「不认识的动作」时自动改用 `/send_msg` 重发一次（其它失败不重发，避免重复）；群号 / QQ 号发送前统一转整数；README 补上 SnowLuma 的 OneBot HTTP 默认端口与 `accessToken` 位置。
 - **v1.5.0**：两件事。① `[schedule].active_hours` 支持**多段**（逗号隔开），能给午休留空档，如 `08:00-11:30, 13:00-21:00`，单段仍可跨午夜；某段写错时整轮按全天处理（宁可多发，也不因为一个笔误把分享全关）。② 新增 `[share].style`：`text` / `image` / `card`，`card` 直接发 **QQ 小程序卡片**——因为麦麦和两个 QQ 适配器的出站编码器都会把 OneBot `json` 段降级成 `[unsupported:json]` 文本，所以卡片由插件用 `httpx` 直连 QQ 客户端的 OneBot HTTP（`[card].api_base` + `access_token`，`card_kind` 可选 `miniapp` / `news`）；失败时逐级回退 卡片 → 图文 → 文字。视频数据模型补上封面字段 `cover`。

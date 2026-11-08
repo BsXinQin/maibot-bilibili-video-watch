@@ -82,7 +82,7 @@ try:  # 宿主正常按包加载插件
     from .persona import PersonaProvider
     from .share_card import build_payload as build_card_payload
     from .share_card import check_card_message, fetch_mini_app_ark, recall_message
-    from .share_card import send_json_card, send_json_card_ex
+    from .share_card import send_json_card, send_json_card_ex, send_tuwen_ark
     from .store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
     from .textfilter import filter_comments, filter_danmaku
 except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回同级导入
@@ -134,13 +134,15 @@ except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回
     from persona import PersonaProvider
     from share_card import build_payload as build_card_payload
     from share_card import check_card_message, fetch_mini_app_ark, recall_message
-    from share_card import send_json_card, send_json_card_ex
+    from share_card import send_json_card, send_json_card_ex, send_tuwen_ark
     from store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
     from textfilter import filter_comments, filter_danmaku
 
 logger = logging.getLogger("plugin.bilibili_interest_share")
 
 PLUGIN_ID = "github.BsXinQin.bilibili_video_watch"
+# card_kind 里这几个值走「原生图文 Ark」通道（不依赖小程序）
+TUWEN_KINDS = ("tuwen", "tuwen_ark", "ark")
 _MAX_HISTORY_ITEMS = 8
 # 封面图最大 8MB：超过就不发图，直接退回文字（避免把分享卡在这一步）
 _MAX_COVER_BYTES = 8 * 1024 * 1024
@@ -1920,7 +1922,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         return {}
 
     async def _send_card(self, stream_id: str, video: Video, *, caption: str = "") -> bool:
-        """把分享发成 QQ 小程序卡片（直连 QQ 客户端的 OneBot HTTP）。"""
+        """把分享发成 QQ 卡片（小程序卡片 / 原生图文 Ark），直连 QQ 客户端的 OneBot HTTP。"""
 
         card_cfg = getattr(self.config, "card", None)
         api_base = str(getattr(card_cfg, "api_base", "") or "").strip()
@@ -1937,6 +1939,25 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         token = str(getattr(card_cfg, "access_token", "") or "")
         timeout = float(getattr(card_cfg, "timeout_seconds", 8.0) or 8.0)
         desc = video.owner or video.description
+        if kind in TUWEN_KINDS:
+            if caption:
+                await self._send_text(stream_id, caption)
+            ok, detail, message_id = await send_tuwen_ark(
+                api_base,
+                token,
+                group_id=group_id,
+                user_id=user_id,
+                title=video.title,
+                desc=desc,
+                jump_url=video.url,
+                preview_url=video.cover,
+                timeout=timeout,
+            )
+            if not ok:
+                logger.warning("图文 Ark 分享失败（%s）：%s", video.bvid, detail)
+                return False
+            logger.info("已用图文 Ark 分享 %s：%s", video.bvid, detail)
+            return await self._verify_card(api_base, token, message_id, timeout, video.bvid)
         payload: Dict[str, Any] = {}
         if kind != "news" and bool(getattr(card_cfg, "use_official_ark", True)):
             payload = await fetch_mini_app_ark(
@@ -1974,14 +1995,25 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             logger.warning("卡片分享失败（%s）：%s", video.bvid, detail)
             return False
         logger.info("已用卡片分享 %s：%s", video.bvid, detail)
-        if message_id and bool(getattr(card_cfg, "verify_send", True)):
-            verdict = await check_card_message(api_base, token, message_id, timeout=min(timeout, 5.0))
-            if verdict is False:
-                logger.warning(
-                    "卡片被 QQ 降级成文本（%s，message_id=%s），撤回并改发图文", video.bvid, message_id
-                )
-                await recall_message(api_base, token, message_id, timeout=min(timeout, 5.0))
-                return False
+        return await self._verify_card(api_base, token, message_id, timeout, video.bvid)
+
+    async def _verify_card(
+        self, api_base: str, token: str, message_id: str, timeout: float, bvid: str
+    ) -> bool:
+        """发出后回查：被 QQ 降级成兜底文本就撤回，返回 False 让调用方改发图文。"""
+
+        if not message_id:
+            return True
+        card_cfg = getattr(self.config, "card", None)
+        if not bool(getattr(card_cfg, "verify_send", True)):
+            return True
+        verdict = await check_card_message(api_base, token, message_id, timeout=min(timeout, 5.0))
+        if verdict is False:
+            logger.warning(
+                "卡片被 QQ 降级成文本（%s，message_id=%s），撤回并改发图文", bvid, message_id
+            )
+            await recall_message(api_base, token, message_id, timeout=min(timeout, 5.0))
+            return False
         return True
 
     async def _send_image_parts(

@@ -5,6 +5,21 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.5.3] - 2026-11-08
+
+小程序卡片被 QQ 判成「小程序已下架」时，可以改用原生「图文 Ark」卡片。
+
+### 新增
+
+- **`card_kind = "tuwen"`（原生图文 Ark）**：调 SnowLuma 的 `POST /send_tuwen_ark`（参数 `group_id`/`user_id`、`title`、`desc`、`summary`、`preview_url`、`jump_url`），由 QQ 客户端自己渲染成一条带封面、标题、简介和跳转按钮的分享卡片。它不依赖任何小程序，所以不会出现「小程序已下架」；NapCat 没有这个动作，请求失败会自动按 `fallback_to_image` 退回封面图 + 文字。
+- `share_card` 新增 `send_tuwen_ark()` 与常量 `TUWEN_ARK_ACTION`；`plugin.py` 新增常量 `TUWEN_KINDS = ("tuwen", "tuwen_ark", "ark")`，并抽出 `_verify_card()` 统一处理「发完回查 + 被降级撤回」。
+
+### 变更
+
+- `card_kind` 说明补上 `tuwen`，默认值仍是 `miniapp`；被 QQ 显示成「小程序已下架」时换成 `tuwen` 即可（B 站小程序在部分 QQ 版本里确实不可用，插件侧无法伪造）。
+- `_manifest.json` 的 `version` 与 `config.py` 的 `config_version` 升到 `1.5.3`。
+- 测试：`tests/test_share_style.py` 新增 7 个用例（`send_tuwen_ark` 群聊 / 私聊 / 入参校验 / 被拒绝，以及 `card_kind=tuwen` 走原生 Ark、被降级撤回改图文、发送失败退回图文）。
+
 ## [1.5.2] - 2026-11-08
 
 小程序卡片改用 QQ 客户端自己生成（SnowLuma 的 `get_mini_app_ark`），并且发完回查、被降级就撤回改发图文。

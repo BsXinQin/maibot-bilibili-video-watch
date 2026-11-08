@@ -43,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.5.2",
+        default="1.5.3",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -705,9 +705,11 @@ class CardConfig(PluginConfigBase):
         default="miniapp",
         description=(
             "卡片样式：miniapp=B 站小程序卡片（和手机上分享一模一样，最像；"
-            "个别 QQ 版本可能不显示）；news=通用图文卡片（更保底，任何版本都能显示）"
+            "B 站小程序在部分 QQ 版本里会显示「小程序已下架」）；"
+            "tuwen=原生图文 Ark 卡片（不依赖小程序，QQ 各版本都能渲染，像一条分享卡片）；"
+            "news=通用图文卡片（structmsg，老版本 QQ 也能显示）"
         ),
-        json_schema_extra={"label": "卡片样式（miniapp / news）", "placeholder": "miniapp"},
+        json_schema_extra={"label": "卡片样式（miniapp / tuwen / news）", "placeholder": "tuwen"},
     )
     use_official_ark: bool = Field(
         default=True,

@@ -27,6 +27,8 @@ MAX_TITLE_CHARS = 60
 MAX_DESC_CHARS = 80
 # SnowLuma 专有动作：用官方 oidb 通道现生成一张真卡片（NapCat 没有）
 MINIAPP_ARK_ACTION = "get_mini_app_ark"
+# SnowLuma 专有动作：发原生「图文 Ark」卡片（不依赖小程序，任何 QQ 版本都能渲染）
+TUWEN_ARK_ACTION = "send_tuwen_ark"
 # QQ 把卡片丢掉的证据：它会用这些文案顶替原来那条消息
 DEGRADED_MARKERS = (
     "发送者版本过低",
@@ -514,6 +516,65 @@ async def fetch_mini_app_ark(
         return {}
     logger.info("已用 SnowLuma 官方通道生成卡片：%s", clean_title)
     return card
+
+
+async def send_tuwen_ark(
+    api_base: str,
+    access_token: str = "",
+    *,
+    group_id: str = "",
+    user_id: str = "",
+    title: str,
+    desc: str = "",
+    jump_url: str,
+    preview_url: str = "",
+    summary: str = "[分享]",
+    timeout: float = 8.0,
+) -> Tuple[bool, str, str]:
+    """让 QQ 客户端发一张原生「图文 Ark」卡片；返回 ``(是否成功, 说明, message_id)``。
+
+    和小程序卡片不同，图文 Ark 不依赖任何小程序，QQ 各版本都能渲染；
+    SnowLuma 有 ``send_tuwen_ark``，NapCat 没有（会自动失败，由调用方退回图文）。
+    """
+
+    base = (api_base or "").strip()
+    if not base:
+        return False, "没有配置 OneBot HTTP 地址", ""
+    clean_title = clean_text(title, MAX_TITLE_CHARS)
+    clean_url = (jump_url or "").strip()
+    if not clean_title or not clean_url:
+        return False, "图文 Ark 缺标题或链接", ""
+    target = _coerce_id(group_id)
+    user = _coerce_id(user_id)
+    if not target and not user:
+        return False, "没有可用的群号或 QQ 号", ""
+    body: Dict[str, Any] = {
+        "title": clean_title,
+        "desc": clean_text(desc, MAX_DESC_CHARS) or clean_title,
+        "jump_url": clean_url,
+        "summary": summary or "[分享]",
+    }
+    clean_cover = normalize_cover(preview_url)
+    if clean_cover:
+        body["preview_url"] = clean_cover
+    if target:
+        body["group_id"] = target
+    else:
+        body["user_id"] = user
+    url = _api_url(base, TUWEN_ARK_ACTION)
+    try:
+        data = await _post(url, body, access_token or "", timeout, use_header=True)
+    except Exception as exc:  # noqa: BLE001 - 发不出去交给调用方退回图文
+        detail = error_text(exc)
+        logger.warning("图文 Ark 直发失败（%s）：%s", url, detail)
+        return False, "请求失败：" + detail[:200], ""
+    if response_ok(data):
+        detail = response_detail(data)
+        logger.info("图文 Ark 已发送（%s）：%s", TUWEN_ARK_ACTION, detail)
+        return True, detail, _message_id(data)
+    detail = response_detail(data)
+    logger.warning("图文 Ark 被拒绝（%s）：%s", url, detail)
+    return False, detail, ""
 
 
 async def check_card_message(

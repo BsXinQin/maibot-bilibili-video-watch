@@ -17,3 +17,4 @@ venv/
 # 本地自检 / 打包产生的临时文件
 _testout.txt
 *.zip
+_t.log

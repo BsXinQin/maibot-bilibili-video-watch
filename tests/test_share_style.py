@@ -469,6 +469,97 @@ class ShareCardTests(unittest.TestCase):
         self.assertEqual(calls[0][1]["message_id"], 259010366)
         self.assertFalse(asyncio.run(self.card.recall_message("", "", "1")))
 
+    def test_send_tuwen_ark_group(self):
+        calls = []
+
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            calls.append((url, body, token))
+            return {"status": "ok", "retcode": 0, "data": {"message_id": 987}}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        ok, detail, message_id = asyncio.run(
+            self.card.send_tuwen_ark(
+                "http://172.23.0.2:3000",
+                "tok",
+                group_id="1083138200",
+                title="标题",
+                desc="测试UP",
+                jump_url="https://www.bilibili.com/video/BV1TEST",
+                preview_url="//i0.hdslb.com/c.jpg",
+                timeout=1.0,
+            )
+        )
+
+        self.assertTrue(ok, detail)
+        self.assertEqual(message_id, "987")
+        self.assertTrue(calls[0][0].endswith("/send_tuwen_ark"))
+        self.assertEqual(calls[0][2], "tok")
+        body = calls[0][1]
+        self.assertEqual(body["group_id"], 1083138200)
+        self.assertNotIn("user_id", body)
+        self.assertEqual(body["title"], "标题")
+        self.assertEqual(body["desc"], "测试UP")
+        self.assertEqual(body["jump_url"], "https://www.bilibili.com/video/BV1TEST")
+        self.assertEqual(body["preview_url"], "https://i0.hdslb.com/c.jpg")
+        self.assertEqual(body["summary"], "[分享]")
+
+    def test_send_tuwen_ark_private(self):
+        calls = []
+
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            calls.append(body)
+            return {"status": "ok", "retcode": 0, "data": {}}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        ok, _, message_id = asyncio.run(
+            self.card.send_tuwen_ark(
+                "http://172.23.0.2:3000",
+                "",
+                user_id="3482063535",
+                title="标题",
+                jump_url="https://www.bilibili.com/video/BV1TEST",
+                timeout=1.0,
+            )
+        )
+        self.assertTrue(ok)
+        self.assertEqual(message_id, "")
+        self.assertEqual(calls[0]["user_id"], 3482063535)
+        self.assertNotIn("group_id", calls[0])
+        # 没有封面时不传 preview_url，让服务端用默认图
+        self.assertNotIn("preview_url", calls[0])
+
+    def test_send_tuwen_ark_validates_input(self):
+        self.assertFalse(asyncio.run(self.card.send_tuwen_ark("", "", group_id="1", title="t", jump_url="u"))[0])
+        self.assertFalse(
+            asyncio.run(self.card.send_tuwen_ark("http://x", "", group_id="1", title="", jump_url="u"))[0]
+        )
+        self.assertFalse(
+            asyncio.run(self.card.send_tuwen_ark("http://x", "", group_id="", user_id="", title="t", jump_url="u"))[0]
+        )
+
+    def test_send_tuwen_ark_reports_rejection(self):
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            return {"status": "failed", "retcode": 1404, "message": "unknown action"}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        ok, detail, message_id = asyncio.run(
+            self.card.send_tuwen_ark(
+                "http://x", "", group_id="1", title="t", jump_url="https://u", timeout=1.0
+            )
+        )
+        self.assertFalse(ok)
+        self.assertIn("unknown action", detail)
+        self.assertEqual(message_id, "")
+
     def test_message_id(self):
         self.assertEqual(self.card._message_id({"data": {"message_id": 12}}), "12")
         self.assertEqual(self.card._message_id({"data": {}}), "")
@@ -542,7 +633,11 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         """把卡片相关的网络调用全换成桩，别让测试真去连 QQ 客户端。"""
 
         module = self.module
-        calls = {"send": [], "ark": [], "check": [], "recall": []}
+        calls = {"send": [], "ark": [], "check": [], "recall": [], "tuwen": []}
+
+        async def fake_tuwen(api_base, token="", **kwargs):
+            calls["tuwen"].append({"api_base": api_base, "token": token, **kwargs})
+            return ok, detail, message_id
 
         async def fake_ark(api_base, token="", **kwargs):
             calls["ark"].append({"api_base": api_base, "token": token, **kwargs})
@@ -563,6 +658,7 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         for name, value in (
             ("fetch_mini_app_ark", fake_ark),
             ("send_json_card_ex", fake_send),
+            ("send_tuwen_ark", fake_tuwen),
             ("check_card_message", fake_check),
             ("recall_message", fake_recall),
         ):
@@ -736,4 +832,65 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self._cover(plugin)
         await plugin._send_parts("stream-1", video, "这段文案不该出现", kind="shiwei")
         self.assertNotIn("这段文案不该出现", self.ctx.send.messages[0]["text"])
+
+    async def test_tuwen_kind_sends_native_ark(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={
+                "api_base": "http://172.23.0.2:3000",
+                "access_token": "tok",
+                "card_kind": "tuwen",
+            },
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        calls = self._stub_card(message_id="999", verdict=True)
+
+        ok = await plugin._send_parts("stream-1", video, "快看这个")
+        self.assertTrue(ok)
+        # 图文 Ark 不走 json 段、也不调小程序通道
+        self.assertEqual(calls["send"], [])
+        self.assertEqual(calls["ark"], [])
+        self.assertEqual(len(calls["tuwen"]), 1)
+        sent = calls["tuwen"][0]
+        self.assertEqual(sent["api_base"], "http://172.23.0.2:3000")
+        self.assertEqual(sent["token"], "tok")
+        self.assertEqual(sent["group_id"], "123456")
+        self.assertEqual(sent["user_id"], "")
+        self.assertEqual(sent["title"], video.title)
+        self.assertEqual(sent["jump_url"], video.url)
+        self.assertEqual(sent["preview_url"], video.cover)
+        self.assertEqual(calls["check"], ["999"])
+        self.assertEqual(len(self.ctx.send.messages), 1)
+        self.assertIn("快看这个", self.ctx.send.messages[0]["text"])
+
+    async def test_tuwen_degraded_falls_back_to_image(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000", "card_kind": "tuwen"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        self._cover(plugin)
+        calls = self._stub_card(message_id="259010366", verdict=False)
+
+        ok = await plugin._send_parts("stream-1", video, "看看")
+        self.assertTrue(ok)
+        self.assertEqual(calls["recall"], ["259010366"])
+        self.assertEqual(len(self.ctx.send.images), 1)
+
+    async def test_tuwen_failure_falls_back_to_image(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000", "card_kind": "tuwen"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        self._cover(plugin)
+        calls = self._stub_card(ok=False, detail="不支持")
+
+        ok = await plugin._send_parts("stream-1", video, "看看")
+        self.assertTrue(ok)
+        self.assertEqual(len(calls["tuwen"]), 1)
+        self.assertEqual(len(self.ctx.send.images), 1)
 
