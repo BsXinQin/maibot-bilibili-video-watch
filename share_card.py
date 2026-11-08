@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -547,6 +548,7 @@ async def send_json_card_ex(
     payload: Dict[str, Any],
     timeout: float = 8.0,
     alt_payloads: Optional[List[Dict[str, Any]]] = None,
+    verify_history: bool = True,
 ) -> Tuple[bool, str, str]:
     """把卡片直发给 QQ 客户端；返回 ``(是否成功, 说明, message_id)``。
 
@@ -563,6 +565,7 @@ async def send_json_card_ex(
     for item in alt_payloads or []:
         if isinstance(item, dict) and item:
             variants.append(item)
+    card_url, card_title = payload_tokens(payload)
     detail = ""
     for index, item in enumerate(variants):
         ok, detail, message_id, retryable = await _send_card_once(
@@ -575,6 +578,23 @@ async def send_json_card_ex(
         )
         if ok:
             return True, detail, message_id
+        if retryable and verify_history and group_id:
+            landed, hist_id = await find_card_in_history(
+                base,
+                access_token or "",
+                group_id=group_id,
+                url=card_url,
+                title=card_title,
+                timeout=min(timeout, 5.0),
+            )
+            if landed:
+                logger.info(
+                    "QQ 没给回执，但群历史里已经有这条消息（message_id=%s），按发送成功处理",
+                    hist_id,
+                )
+                return True, detail + "（回查群历史：已落库）", hist_id
+            if landed is False:
+                logger.info("QQ 没给回执，群历史里也找不到这条：确实没发出去")
         if index + 1 < len(variants) and retryable:
             logger.info("QQ 没给回执（%s），换另一种卡片再试", detail[:160])
             continue
@@ -618,6 +638,164 @@ def looks_degraded(data: Any) -> bool:
         return False
     return any(marker in text for marker in DEGRADED_MARKERS)
 
+
+# 回查群消息用：SnowLuma / NapCat 都有 get_group_msg_history
+GROUP_HISTORY_ACTION = "get_group_msg_history"
+# 卡片被 QQ 降级成文本后，群历史里能看到的特征字
+HISTORY_CARD_MARKERS = (
+    "哔哩哔哩",
+    "小程序",
+    "无法展示内容",
+    "版本过低",
+    "卡片",
+)
+
+
+def payload_tokens(payload: Dict[str, Any]) -> Tuple[str, str]:
+    """从卡片里取出链接与标题，用来在群历史里认领这条消息。"""
+
+    url = ""
+    title = ""
+    if not isinstance(payload, dict):
+        return "", ""
+    meta = payload.get("meta")
+    detail = meta.get("detail_1") if isinstance(meta, dict) else None
+    if isinstance(detail, dict):
+        url = str(detail.get("qqdocurl") or detail.get("url") or "").strip()
+        title = str(detail.get("desc") or detail.get("title") or "").strip()
+    if not title:
+        title = str(payload.get("prompt") or "").strip()
+    return url, title
+
+
+def _url_tokens(url: str) -> List[str]:
+    """链接本身的几段碎片：整条、去掉协议、最后一个路径段。"""
+
+    text = (url or "").strip().lower()
+    if not text:
+        return []
+    tokens = [text]
+    stripped = text.split("://")[-1].strip()
+    if stripped and stripped not in tokens:
+        tokens.append(stripped)
+    tail = re.split(r"[?#]", stripped)[0].rstrip("/").split("/")[-1]
+    if len(tail) >= 6 and tail not in tokens:
+        tokens.append(tail)
+    return tokens
+
+
+def _history_messages(data: Any) -> List[Dict[str, Any]]:
+    """从 get_group_msg_history 的返回里掏出消息列表。"""
+
+    if not isinstance(data, dict):
+        return []
+    inner = data.get("data")
+    for source in (inner, data):
+        if isinstance(source, dict):
+            messages = source.get("messages")
+            if isinstance(messages, list):
+                return [item for item in messages if isinstance(item, dict)]
+        elif isinstance(source, list):
+            return [item for item in source if isinstance(item, dict)]
+    return []
+
+
+def message_matches_card(
+    message: Any,
+    *,
+    url: str = "",
+    title: str = "",
+) -> bool:
+    """这条群消息是不是我们刚发的那张卡片（含被降级成文本的情形）。"""
+
+    haystack = _flatten_text(message).lower()
+    if not haystack:
+        return False
+    for token in _url_tokens(url):
+        if token and token in haystack:
+            return True
+    clean_title = (title or "").strip().lower()
+    if len(clean_title) >= 4 and clean_title in haystack:
+        return True
+    if url and any(marker.lower() in haystack for marker in HISTORY_CARD_MARKERS):
+        return True
+    return False
+
+
+def _history_message_id(message: Any) -> str:
+    if not isinstance(message, dict):
+        return ""
+    for key in ("message_id", "msg_id", "id"):
+        value = message.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+async def fetch_group_history(
+    api_base: str,
+    access_token: str = "",
+    *,
+    group_id: str = "",
+    count: int = 8,
+    timeout: float = 5.0,
+) -> List[Dict[str, Any]]:
+    """拉群里最近几条消息；拿不到就返回空列表。"""
+
+    target = _coerce_id(group_id)
+    base = (api_base or "").strip()
+    if not base or not target:
+        return []
+    url = _api_url(base, GROUP_HISTORY_ACTION)
+    body = {"group_id": target, "count": max(1, min(int(count), 50))}
+    try:
+        data = await _post(url, body, access_token or "", timeout, use_header=True)
+    except Exception as exc:  # noqa: BLE001 - 回查失败不影响主流程
+        logger.info("回查群历史失败：%s", error_text(exc))
+        return []
+    if not response_ok(data):
+        logger.info("回查群历史被拒绝：%s", response_detail(data)[:160])
+        return []
+    return _history_messages(data)
+
+
+async def find_card_in_history(
+    api_base: str,
+    access_token: str = "",
+    *,
+    group_id: str = "",
+    url: str = "",
+    title: str = "",
+    count: int = 8,
+    timeout: float = 5.0,
+    attempts: int = 3,
+    interval: float = 0.8,
+) -> Tuple[Optional[bool], str]:
+    """回查群历史，看这条卡片到底落库没有。
+
+    返回 (True, message_id) 表示确实发出去了；(False, "") 表示查得到历史
+    但没有这条；(None, "") 表示没法判断（私聊或者接口不支持）。
+    """
+
+    if not group_id or not (url or title):
+        return None, ""
+    rounds = max(1, int(attempts))
+    for index in range(rounds):
+        messages = await fetch_group_history(
+            api_base,
+            access_token,
+            group_id=group_id,
+            count=count,
+            timeout=timeout,
+        )
+        if messages:
+            for message in messages:
+                if message_matches_card(message, url=url, title=title):
+                    return True, _history_message_id(message)
+            return False, ""
+        if index + 1 < rounds:
+            await asyncio.sleep(interval)
+    return None, ""
 
 async def send_json_card(
     api_base: str,

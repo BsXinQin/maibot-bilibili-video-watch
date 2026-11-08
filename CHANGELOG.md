@@ -5,6 +5,20 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.5.6] - 2026-11-08
+
+### 修复
+
+- 修「卡片其实发成了，却因为没回执被判失败」的二次伤害：1.5.5 一收到 `delivery was not confirmed` 就换另一种卡片重发，如果第一版已经落库，群里会出现两条。现在没回执时先调 `get_group_msg_history` 回查：
+  - 群里已经能看到这张卡（按 `qqdocurl` 尾巴 / 标题 / 「哔哩哔哩」特征字认领）→ 直接算发送成功，不再重发；
+  - 查得到历史但没有这条 → 确实没发出去，才换另一种卡片重试；
+  - 私聊或者接口不支持回查 → 退回 1.5.5 的行为。
+
+### 新增
+
+- `share_card.payload_tokens()` / `_url_tokens()` / `_history_messages()` / `message_matches_card()` / `fetch_group_history()` / `find_card_in_history()`。
+- 配置 `[card].verify_history`（默认 `true`，UI 名「没回执时回查群历史」）。
+- 12 个新用例：链接碎片、历史返回的几种形状、认领逻辑、三态回查、命中不重发、未命中才换版、关掉开关不查历史、插件侧透传开关。
 ## [1.5.5] - 2026-11-08
 
 修「卡片明明发出去了，QQ 却说没有回执」。

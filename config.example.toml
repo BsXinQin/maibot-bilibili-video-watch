@@ -10,7 +10,7 @@
 # 启用插件 —— 是否启用沁の刷B站视频
 enabled = true
 # 配置版本
-config_version = "1.5.5"
+config_version = "1.5.6"
 
 [schedule]
 # 刷取间隔（分钟） —— 每隔多少分钟自动刷一次 B 站：1=每分钟，60=每小时，1440=每天（可调范围 1 分钟 ~ 24 小时）
@@ -253,6 +253,8 @@ card_kind = "miniapp"
 use_official_ark = true
 # 带 bthirdappforward 转发标记 —— 手机上那张卡是「转发」出来的所以带这个标记；但走协议直发时带上它，SnowLuma 常报 delivery was not confirmed（QQ 没给消息回执）。默认关；无论开关，发失败都会自动换另一种再试一次
 miniapp_forward = false
+# 没回执时回查群历史 —— SnowLuma 常报 delivery was not confirmed（QQ 只回 result=0、不给 message_id）。打开后先拉一次群历史：卡片其实已经在群里就算发送成功、不再重发；看不到才换另一种卡片重试。关掉就会直接换版重试，可能重复发两条
+verify_history = true
 # 失败退回图文 —— 卡片发不出去时，是否改发「封面图 + 文字」
 fallback_to_image = true
 # 回查并在被降级时改发图文 —— 发完用 get_msg 看这条消息，被 QQ 换成「发送者版本过低」就撤回，再改发封面图 + 文字

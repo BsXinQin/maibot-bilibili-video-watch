@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.5.5-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.5.6-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v1.5.5** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
+> 当前版本 **v1.5.6** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -171,7 +171,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.5.5"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.5.6"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -377,6 +377,7 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 | `miniapp_forward` | `false` | `miniapp` 卡片是否带手机那张卡上的「第三方 App 转发」标记（`bthirdappforward` + `config.forward=1`）。带标记时 SnowLuma 常常拿不到消息回执（日志 `group message delivery was not confirmed: QQ returned no message receipt`），所以默认关；**不管开关，发失败都会自动换另一种版本重发一次** |
 | `fallback_to_image` | `true` | 卡片发不出去时，改发「封面图 + 文字」 |
 | `verify_send` | `true` | 发完回查这条消息：被 QQ 降级成「发送者版本过低，无法展示内容」就撤回，并改发封面图 + 文字 |
+| `verify_history` | `true` | 没拿到消息回执时先查群历史：卡片已在群里就算发送成功、不再重发；查不到才换另一种版本重试（避免同一张卡发两遍） |
 | `card_kind = "tuwen"` 额外说明 | — | 走 SnowLuma 的 `send_tuwen_ark`，参数是 `title` / `desc` / `summary` / `preview_url` / `jump_url`；NapCat 没这个动作，会自动退回图文 |
 | `timeout_seconds` | `8.0` | 请求 OneBot 接口的超时（`1`~`30` 秒） |
 
@@ -706,7 +707,8 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
-- **v1.5.5**：修「卡片发出去但 QQ 说没有回执」。SnowLuma 对群消息做严格回执校验，带 `bthirdappforward` 的卡片常常只拿到 `result=0` 而没有 `message_id`，于是报 `group message delivery was not confirmed: QQ returned no message receipt`，插件以为失败、又补一遍图文。现在 `build_miniapp_payload()` 支持 `forward` 开关、新增 `apply_forward_flags()` / `miniapp_variants()`：**默认先发不带转发标记的版本**，被回「没回执」时自动换另一种版本重发一次（风控之类的真失败不重发，避免重复）。新增配置 `[card].miniapp_forward`。
+- **v1.5.6**：没回执时先回查群历史（`get_group_msg_history`），卡片已经在群里就算成功、不再重发，避免 1.5.5 的换版重试把同一张卡发两遍；新增配置 `[card].verify_history`
+- **v1.5.5**：修「卡片发出去但 QQ 说没有回执」。SnowLuma 对群消息做严格回执校验，带 `bthirdappforward` 的卡片常常只拿到 `result=0` 而没有 `message_id`，于是报 `group message delivery was not confirmed: QQ returned no message receipt`，插件以为失败、又补一遍图文。现在 `build_miniapp_payload()` 支持 `forward` 开关、新增 `apply_forward_flags()` / `miniapp_variants()`：**默认先发不带转发标记的版本**，被回「没回执」时自动换另一种版本重发一次（风控之类的真失败不重发，避免重复）。新增配置 `[card].miniapp_forward`。（1.5.6 起换版前会先回查群历史，防止其实已发出却又发一遍）
 - **v1.5.4**：小程序卡片改成「按真卡片复刻」。用户在 QQ 里自己转发 B 站视频拿到原始 `json`（`appID=100951776`、`view=view_8C8E89B49BE609866298ADDFF2DBABA4`、`config.token`、`bthirdappforward`），据此重写 `build_miniapp_payload()`：外层补齐 `appID` / `view_<分享模板ID>` / `config.forward` / `bthirdappforward` / `bthirdappforwardforbackendswitch`，`meta.detail_1` 补齐 `appid`(字符串) / `shareTemplateId` / `qqdocurl` / `shareTemplateData` / `scene` / `host` / `showLittleTail` / `shareOrigin` / `url`(m.q.qq.com)，并把 B 站小程序图标换成手机卡片用的那张。新增 `fill_miniapp_payload()`：官方通道返回的卡片只补空字段，合法的 `view_<模板ID>` + `appID` 才允许接管结构。`miniapp` 不再强制要封面。
 - **v1.5.3**：新增 `card_kind = "tuwen"`——走 SnowLuma 的 `POST /send_tuwen_ark`，由 QQ 客户端渲染成原生「图文 Ark」卡片（封面 + 标题 + 简介 + 跳转），**不依赖任何小程序**，所以不会出现「小程序已下架」。`miniapp` 被 QQ 判成已下架时换成它即可；NapCat 没这个动作会自动退回图文。同时把「发完回查 + 被降级撤回」抽成 `_verify_card()`，两种卡片共用。
 - **v1.5.2**：小程序卡片改用 QQ 客户端**自己生成**——`miniapp` 先调 SnowLuma 的 `get_mini_app_ark`（内部走 `LightAppSvc.mini_app_share.AdaptShareInfo`），把它返回的卡片对象原样塞进 `json` 段发出，不再靠本地猜字段；NapCat 没这个动作会自动退回本地 payload。另外新增 `[card].verify_send`：发完用 `get_msg` 回查，发现被 QQ 降级成「发送者版本过低」就 `delete_msg` 撤回，再按 `fallback_to_image` 改发封面图 + 文字。顺带：没有封面的视频现在也能发 `miniapp` 卡（官方通道只要标题 + 链接）。

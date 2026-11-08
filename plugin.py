@@ -2007,6 +2007,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             payload=payload,
             timeout=timeout,
             alt_payloads=alt_payloads,
+            verify_history=bool(getattr(card_cfg, "verify_history", True)),
         )
         if not ok:
             logger.warning("卡片分享失败（%s）：%s", video.bvid, detail)

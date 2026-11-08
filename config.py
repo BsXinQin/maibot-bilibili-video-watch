@@ -43,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.5.5",
+        default="1.5.6",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -741,6 +741,13 @@ class CardConfig(PluginConfigBase):
             "发完回查这条消息：如果被 QQ 降级成「发送者版本过低，无法展示内容」，就撤回它并改发封面图 + 文字（需要 QQ 客户端支持 get_msg / delete_msg）"
         ),
         json_schema_extra={"label": "回查并在被降级时改发图文"},
+    )
+    verify_history: bool = Field(
+        default=True,
+        description=(
+            "发完没拿到消息回执时（SnowLuma 的 delivery was not confirmed），先拉一次群历史看这条卡片到底落库没有：已经能看到就算发送成功、不再重发；看不到才换另一种卡片重试。避免卡片其实发成了却重复发两遍"
+        ),
+        json_schema_extra={"label": "没回执时回查群历史"},
     )
     timeout_seconds: float = Field(
         default=8.0,

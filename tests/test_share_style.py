@@ -493,6 +493,10 @@ class ShareCardTests(unittest.TestCase):
         calls = []
 
         async def fake_post(url, body, token, timeout, *, use_header=True):
+            if "message" not in body:
+                # 没回执后的群历史回查：这里假装看不到，让它照常换版重试
+                calls.append({"history": True})
+                return {"status": "ok", "data": {"messages": [{"raw": "普通聊天"}]}}
             segment = body["message"][0]
             payload = json.loads(segment["data"]["data"])
             calls.append(payload)
@@ -522,10 +526,11 @@ class ShareCardTests(unittest.TestCase):
 
         self.assertTrue(ok, detail)
         self.assertEqual(message_id, "9")
-        self.assertEqual(len(calls), 2)
-        self.assertTrue(calls[0]["bthirdappforward"])
-        self.assertNotIn("bthirdappforward", calls[1])
-        self.assertEqual(calls[1]["config"]["forward"], 0)
+        cards = [item for item in calls if not item.get("history")]
+        self.assertEqual(len(cards), 2)
+        self.assertTrue(cards[0]["bthirdappforward"])
+        self.assertNotIn("bthirdappforward", cards[1])
+        self.assertEqual(cards[1]["config"]["forward"], 0)
 
     def test_rejection_does_not_try_alt_payload(self):
         calls = []
@@ -765,6 +770,183 @@ class ShareCardTests(unittest.TestCase):
         self.assertEqual(self.card._message_id({"data": {}}), "")
         self.assertEqual(self.card._message_id("nope"), "")
 
+    def test_payload_tokens_reads_qqdocurl(self):
+        payload = _cover_ready_payload(self.card)
+        url, title = self.card.payload_tokens(payload)
+        self.assertEqual(url, payload["meta"]["detail_1"]["qqdocurl"])
+        self.assertEqual(title, payload["meta"]["detail_1"]["desc"])
+        self.assertEqual(self.card.payload_tokens({}), ("", ""))
+
+    def test_url_tokens_splits_link(self):
+        tokens = self.card._url_tokens("https://www.bilibili.com/video/BV1nr476pEbE?share=1")
+        self.assertIn("https://www.bilibili.com/video/bv1nr476pebe?share=1", tokens)
+        self.assertIn("www.bilibili.com/video/bv1nr476pebe?share=1", tokens)
+        self.assertEqual(self.card._url_tokens(""), [])
+
+    def test_history_messages_shapes(self):
+        rows = [{"message_id": 1}, {"message_id": 2}]
+        self.assertEqual(len(self.card._history_messages({"data": {"messages": rows}})), 2)
+        self.assertEqual(len(self.card._history_messages({"messages": rows})), 2)
+        self.assertEqual(len(self.card._history_messages({"data": rows})), 2)
+        self.assertEqual(self.card._history_messages({}), [])
+        self.assertEqual(self.card._history_messages("x"), [])
+
+    def test_message_matches_card(self):
+        payload = _cover_ready_payload(self.card)
+        url, title = self.card.payload_tokens(payload)
+        tail = url.rstrip("/").split("/")[-1]
+        self.assertTrue(
+            self.card.message_matches_card({"raw_message": "看看 " + tail}, url=url, title=title)
+        )
+        # 被 QQ 降级成文本时只剩这些字
+        self.assertTrue(
+            self.card.message_matches_card({"raw_message": "[卡片:哔哩哔哩]"}, url=url, title=title)
+        )
+        self.assertFalse(self.card.message_matches_card({"raw_message": "午饭吃啥"}, url=url, title=title))
+        self.assertFalse(self.card.message_matches_card({}, url=url, title=title))
+
+    def test_fetch_group_history(self):
+        calls = []
+
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            calls.append((url, body))
+            return {"status": "ok", "retcode": 0, "data": {"messages": [{"message_id": 5}]}}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        rows = asyncio.run(
+            self.card.fetch_group_history("http://172.23.0.2:3000", "tok", group_id="1083138200")
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(calls[0][0].endswith("/get_group_msg_history"))
+        self.assertEqual(calls[0][1]["group_id"], 1083138200)
+        self.assertEqual(calls[0][1]["count"], 8)
+        # 没配地址 / 没群号 / 被拒绝，都返回空列表
+        self.assertEqual(asyncio.run(self.card.fetch_group_history("", "", group_id="1")), [])
+        self.assertEqual(asyncio.run(self.card.fetch_group_history("http://x", "", group_id="")), [])
+
+        async def reject(url, body, token, timeout, *, use_header=True):
+            return {"status": "failed", "retcode": 1404, "message": "unknown action"}
+
+        self.card._post = reject
+        self.assertEqual(asyncio.run(self.card.fetch_group_history("http://x", "", group_id="1")), [])
+
+    def test_find_card_in_history_three_states(self):
+        payload = _cover_ready_payload(self.card)
+        url, title = self.card.payload_tokens(payload)
+        tail = url.rstrip("/").split("/")[-1]
+
+        async def fake_post(api, body, token, timeout, *, use_header=True):
+            body_ = body
+            if body_.get("count") == 8:
+                return {"status": "ok", "data": {"messages": [{"message_id": 321, "raw": tail}]}}
+            return {"status": "ok", "data": {"messages": []}}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+        found, mid = asyncio.run(
+            self.card.find_card_in_history("http://x", "", group_id="1", url=url, title=title)
+        )
+        self.assertTrue(found)
+        self.assertEqual(mid, "321")
+        # 私聊 / 没有群号：没法判断
+        self.assertEqual(
+            asyncio.run(self.card.find_card_in_history("http://x", "", group_id="", url=url, title=title)),
+            (None, ""),
+        )
+
+    def test_unconfirmed_history_hit_is_success(self):
+        cards = []
+
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            if "message" in body:
+                cards.append(json.loads(body["message"][0]["data"]["data"]))
+                return {
+                    "status": "failed",
+                    "message": "group message delivery was not confirmed: QQ returned no message receipt",
+                }
+            return {"status": "ok", "data": {"messages": [{"message_id": 777, "raw": "[卡片:哔哩哔哩]"}]}}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        base = _cover_ready_payload(self.card)
+        variants = self.card.miniapp_variants(base, forward=True)
+        ok, detail, message_id = asyncio.run(
+            self.card.send_json_card_ex(
+                "http://172.23.0.2:3000",
+                "tok",
+                group_id="1083138200",
+                payload=variants[0],
+                alt_payloads=variants[1:],
+                timeout=1.0,
+            )
+        )
+        self.assertTrue(ok, detail)
+        self.assertEqual(message_id, "777")
+        self.assertIn("回查群历史", detail)
+        # 卡片已经在群里了，绝不能再发第二遍
+        self.assertEqual(len(cards), 1)
+
+    def test_unconfirmed_history_miss_retries_alt(self):
+        cards = []
+
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            if "message" in body:
+                cards.append(json.loads(body["message"][0]["data"]["data"]))
+                return {"status": "failed", "message": "delivery was not confirmed"}
+            return {"status": "ok", "data": {"messages": [{"message_id": 1, "raw": "普通聊天"}]}}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        base = _cover_ready_payload(self.card)
+        variants = self.card.miniapp_variants(base, forward=True)
+        ok, detail, _ = asyncio.run(
+            self.card.send_json_card_ex(
+                "http://172.23.0.2:3000",
+                "tok",
+                group_id="1083138200",
+                payload=variants[0],
+                alt_payloads=variants[1:],
+                timeout=1.0,
+            )
+        )
+        self.assertFalse(ok)
+        self.assertEqual(len(cards), 2)
+
+    def test_history_check_can_be_disabled(self):
+        urls = []
+
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            urls.append(url)
+            if "message" in body:
+                return {"status": "failed", "message": "delivery was not confirmed"}
+            return {"status": "ok", "data": {"messages": []}}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        base = _cover_ready_payload(self.card)
+        variants = self.card.miniapp_variants(base, forward=True)
+        asyncio.run(
+            self.card.send_json_card_ex(
+                "http://172.23.0.2:3000",
+                "tok",
+                group_id="1083138200",
+                payload=variants[0],
+                alt_payloads=variants[1:],
+                timeout=1.0,
+                verify_history=False,
+            )
+        )
+        self.assertFalse(any(item.endswith("/get_group_msg_history") for item in urls))
 
 class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
     """_send_parts 按 share.style 分派，并逐级回退。"""
@@ -929,6 +1111,28 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(sent["payload"]["bthirdappforward"])
         self.assertEqual(sent["payload"]["config"]["forward"], 1)
         self.assertNotIn("bthirdappforward", sent["alt_payloads"][0])
+
+
+    async def test_card_style_passes_verify_history(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        calls = self._stub_card()
+
+        await plugin._send_parts("stream-1", video, "快看这个")
+        self.assertTrue(calls["send"][0]["verify_history"])
+
+        off = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000", "verify_history": False},
+        )
+        off._register_stream_route("stream-1", group_id="123456")
+        calls_off = self._stub_card()
+        await off._send_parts("stream-1", video, "快看这个")
+        self.assertFalse(calls_off["send"][0]["verify_history"])
 
     async def test_news_kind_has_no_alt_payload(self):
         plugin = self._plugin(
