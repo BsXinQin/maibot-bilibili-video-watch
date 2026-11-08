@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import math
@@ -27,6 +28,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+
+import httpx
 
 from maibot_sdk import HookHandler, MaiBotPlugin, Tool
 
@@ -77,6 +80,8 @@ try:  # 宿主正常按包加载插件
         select_comments,
     )
     from .persona import PersonaProvider
+    from .share_card import build_payload as build_card_payload
+    from .share_card import send_json_card
     from .store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
     from .textfilter import filter_comments, filter_danmaku
 except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回同级导入
@@ -126,6 +131,8 @@ except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回
         select_comments,
     )
     from persona import PersonaProvider
+    from share_card import build_payload as build_card_payload
+    from share_card import send_json_card
     from store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
     from textfilter import filter_comments, filter_danmaku
 
@@ -133,6 +140,8 @@ logger = logging.getLogger("plugin.bilibili_interest_share")
 
 PLUGIN_ID = "github.BsXinQin.bilibili_video_watch"
 _MAX_HISTORY_ITEMS = 8
+# 封面图最大 8MB：超过就不发图，直接退回文字（避免把分享卡在这一步）
+_MAX_COVER_BYTES = 8 * 1024 * 1024
 
 # 深度读（bili_read 的 detail=full）：字幕全文时间轴 + 弹幕时间线，默认值刻意
 # 比摘要档大，但仍然有上限，避免一次读取把上下文撑爆。
@@ -178,13 +187,15 @@ def _parse_hhmm(value: str) -> Optional[int]:
     return min(hour * 60 + minute, 24 * 60)
 
 
-def _parse_active_hours(value: str) -> Optional[Tuple[int, int]]:
-    """解析 ``"9:00-23:30"``；空字符串或非法值返回 ``None``（表示全天）。"""
+_WINDOW_RANGE_SEPARATORS = ("-", "~", "～", "—", "至")
+# 多段活跃时间之间的分隔符：英文/中文逗号、中英文分号、顿号、竖线
+_WINDOW_SPLIT_RE = re.compile(r"[,，;；、|]+")
 
-    text = (value or "").strip()
-    if not text:
-        return None
-    for separator in ("-", "~", "～", "—"):
+
+def _parse_active_window(text: str) -> Optional[Tuple[int, int]]:
+    """解析单个 ``"9:00-23:30"`` 窗口；无法解析返回 ``None``。"""
+
+    for separator in _WINDOW_RANGE_SEPARATORS:
         if separator in text:
             start_text, _, end_text = text.partition(separator)
             start = _parse_hhmm(start_text)
@@ -195,20 +206,58 @@ def _parse_active_hours(value: str) -> Optional[Tuple[int, int]]:
     return None
 
 
-def _in_active_window(value: str, *, now: Optional[datetime] = None) -> bool:
-    """判断当前时间是否落在活跃时间段内（支持跨午夜）。"""
+def _parse_active_windows(value: str) -> Optional[List[Tuple[int, int]]]:
+    """解析活跃时间，支持多段（用来给午休之类的时间留空档）。
 
-    window = _parse_active_hours(value)
-    if window is None:
+    例：``"08:00-11:30, 13:00-21:00"`` → 两段窗口。
+    空字符串 → ``None``（= 全天允许）；任意一段写错也返回 ``None``，
+    按全天处理，避免一个笔误把分享彻底关掉。
+    """
+
+    text = (value or "").strip()
+    if not text:
+        return None
+    windows: List[Tuple[int, int]] = []
+    for part in _WINDOW_SPLIT_RE.split(text):
+        chunk = part.strip()
+        if not chunk:
+            continue
+        window = _parse_active_window(chunk)
+        if window is None:
+            logger.warning(
+                "活跃时间「%s」里的「%s」不是 HH:MM-HH:MM 格式，本轮按全天处理",
+                text,
+                chunk,
+            )
+            return None
+        windows.append(window)
+    return windows or None
+
+
+def _parse_active_hours(value: str) -> Optional[Tuple[int, int]]:
+    """兼容旧接口：返回第一段活跃时间；``None`` 表示全天。"""
+
+    windows = _parse_active_windows(value)
+    return windows[0] if windows else None
+
+
+def _in_active_window(value: str, *, now: Optional[datetime] = None) -> bool:
+    """判断当前时间是否落在任意一段活跃时间里（支持跨午夜）。"""
+
+    windows = _parse_active_windows(value)
+    if not windows:
         return True
-    start, end = window
     current = now or datetime.now()
     minute = current.hour * 60 + current.minute
-    if start == end:
-        return True
-    if start < end:
-        return start <= minute < end
-    return minute >= start or minute < end
+    for start, end in windows:
+        if start == end:
+            return True
+        if start < end:
+            if start <= minute < end:
+                return True
+        elif minute >= start or minute < end:
+            return True
+    return False
 
 
 def _structured_payload_text(value: Any, depth: int = 0) -> str:
@@ -490,6 +539,9 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         self._bot_account_ids: Set[str] = set()
         self._stream_fallbacks: Dict[str, List[str]] = {}
         self._stream_overrides: Dict[str, str] = {}
+        # stream_id → {group_id, user_id, account_id}：麦麦的 stream_id 不是群号，
+        # 小程序卡片直发（OneBot HTTP）要用真实的群号 / QQ 号，所以顺手记一张表
+        self._stream_routes: Dict[str, Dict[str, str]] = {}
         # 本轮攒下来的配置写回操作：写 config.toml 会让宿主重载插件、打断当前这一轮，
         # 所以先记下来，等这一轮跑完再一次性写盘。
         self._pending_stream_writes: Dict[str, Tuple[Any, List[str]]] = {}
@@ -633,6 +685,9 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         self._persona = None
         self._read_cache = None
         self._auto_read_seen.clear()
+        self._stream_fallbacks.clear()
+        self._stream_overrides.clear()
+        self._stream_routes.clear()
 
     async def on_config_update(self, scope: str, config_data: Dict[str, Any], version: str) -> None:
         logger.info("沁の刷B站视频配置已更新（scope=%s, version=%s），重启后台循环", scope, version)
@@ -1215,6 +1270,36 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         self._allowed_streams_at = time.time()
         return allowed
 
+    def _register_stream_route(
+        self,
+        stream_id: str,
+        *,
+        group_id: Any = "",
+        user_id: Any = "",
+        account_id: Any = "",
+    ) -> None:
+        """记录 ``stream_id`` → 真实群号 / QQ 号，卡片直发时要用。
+
+        麦麦的 stream_id 是内部标识（例如 ``qq:GroupMessage:123``），不是群号，
+        而 OneBot HTTP 接口必须拿到真实群号才能发 json 段。
+        """
+
+        sid = str(stream_id or "").strip()
+        if not sid:
+            return
+        route = self._stream_routes.get(sid)
+        if route is None:
+            route = {}
+            self._stream_routes[sid] = route
+        for key, value in (
+            ("group_id", group_id),
+            ("user_id", user_id),
+            ("account_id", account_id),
+        ):
+            text = str(value or "").strip()
+            if text:
+                route[key] = text
+
     async def _refresh_bot_account_ids(self) -> Set[str]:
         """收集宿主里登记过的 bot 账号 id，用来过滤 bot 自己发的消息。"""
 
@@ -1237,6 +1322,12 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             account_id = str(item.get("account_id") or "").strip()
             if account_id:
                 found.add(account_id)
+            self._register_stream_route(
+                _stream_id_of(item),
+                group_id=item.get("group_id"),
+                user_id=item.get("user_id"),
+                account_id=account_id,
+            )
         if found:
             self._bot_account_ids = found
         return self._bot_account_ids
@@ -1286,6 +1377,12 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             stream_id = _stream_id_of(item)
             if not stream_id:
                 continue
+            self._register_stream_route(
+                stream_id,
+                group_id=item.get("group_id"),
+                user_id=item.get("user_id"),
+                account_id=account_id,
+            )
             if group_id:
                 matched = str(item.get("group_id") or "").strip() == group_id
             elif user_id:
@@ -1304,7 +1401,13 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         """
 
         if target.stream_id:
-            return str(target.stream_id).strip()
+            stream_id = str(target.stream_id).strip()
+            self._register_stream_route(
+                stream_id,
+                group_id=getattr(target, "group_id", ""),
+                user_id=getattr(target, "user_id", ""),
+            )
+            return stream_id
         chat = getattr(self.ctx, "chat", None)
         if chat is None:
             return ""
@@ -1321,6 +1424,12 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         if not primary:
             return ""
         candidates = await self._stream_candidates(target, primary)
+        for candidate in candidates:
+            self._register_stream_route(
+                candidate,
+                group_id=getattr(target, "group_id", ""),
+                user_id=getattr(target, "user_id", ""),
+            )
         alternatives = [item for item in candidates if item != primary]
         if alternatives:
             self._stream_fallbacks[primary] = alternatives
@@ -1656,24 +1765,27 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
 
     # -- 发送 ----------------------------------------------------------
 
-    async def _send_text(self, stream_id: str, text: str) -> bool:
-        """发送一条文本；失败时自动换用同群 / 同用户的其他候选会话。
+    def _share_style(self) -> str:
+        """当前的分享形式：text / image / card；非法值一律按 text 处理。"""
+
+        style = str(getattr(self.config.share, "style", "text") or "text").strip().lower()
+        return style if style in ("text", "image", "card") else "text"
+
+    async def _send_with_fallback(self, stream_id: str, sender) -> bool:
+        """用某个发送函数向会话发内容；失败时换同群 / 同用户的其他候选会话。
 
         宿主换连接器后，同一个群可能同时挂着旧账号的会话和新账号的会话，
         能力接口返回的可能正是那个已经掉线的旧会话（发送时报「未命中任何发送路由」）。
         这种情况下换一个候选会话重试，并把可用的那个记下来。
         """
 
-        text = (text or "").strip()
-        if not text or not stream_id:
-            return False
         primary = self._stream_overrides.get(stream_id, stream_id)
-        if await self._send_text_once(primary, text):
+        if await sender(primary):
             return True
         for alternative in self._stream_fallbacks.get(stream_id, ()) or ():
             if alternative == primary:
                 continue
-            if await self._send_text_once(alternative, text):
+            if await sender(alternative):
                 self._stream_overrides[stream_id] = alternative
                 logger.info(
                     "会话 %s 发送失败，已自动改用可用会话 %s",
@@ -1682,6 +1794,38 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 )
                 return True
         return False
+
+    @staticmethod
+    def _send_result_ok(result: Any, stream_id: str, label: str = "消息") -> bool:
+        """把不同宿主版本的发送返回值统一成 bool。"""
+
+        if isinstance(result, dict):
+            # - 宿主 1.3.15 / SDK 2.16（return_details=False）：{"success": bool}
+            # - 旧版或 return_details=True：{"sent": bool, "message_id": ...}
+            if "sent" in result:
+                return bool(result.get("sent"))
+            if "success" in result:
+                if not result.get("success"):
+                    logger.warning(
+                        "发送%s失败（%s）：%s",
+                        label,
+                        stream_id,
+                        result.get("error") or result,
+                    )
+                    return False
+                return True
+            return True
+        return bool(result)
+
+    async def _send_text(self, stream_id: str, text: str) -> bool:
+        """发送一条文本；失败时自动换用同群 / 同用户的其他候选会话。"""
+
+        text = (text or "").strip()
+        if not text or not stream_id:
+            return False
+        return await self._send_with_fallback(
+            stream_id, lambda sid: self._send_text_once(sid, text)
+        )
 
     async def _send_text_once(self, stream_id: str, text: str) -> bool:
         """向指定会话发送一条文本；``stream_id`` 为空时返回 False。"""
@@ -1697,21 +1841,143 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         except Exception as exc:  # noqa: BLE001
             logger.warning("发送消息失败（%s）：%s", stream_id, exc)
             return False
-        if isinstance(result, dict):
-            # 不同宿主版本的返回结构不同：
-            # - 宿主 1.3.15 / SDK 2.16（return_details=False）：{"success": bool}
-            # - 旧版或 return_details=True：{"sent": bool, "message_id": ...}
-            if "sent" in result:
-                return bool(result.get("sent"))
-            if "success" in result:
-                if not result.get("success"):
-                    logger.warning(
-                        "发送消息失败（%s）：%s", stream_id, result.get("error") or result
+        return self._send_result_ok(result, stream_id)
+
+    async def _send_image(self, stream_id: str, data: bytes) -> bool:
+        """发送一张图片（宿主只收裸 base64，不带 data: 前缀）。"""
+
+        if not data or not stream_id:
+            return False
+        encoded = base64.b64encode(data).decode("ascii")
+        return await self._send_with_fallback(
+            stream_id, lambda sid: self._send_image_once(sid, encoded)
+        )
+
+    async def _send_image_once(self, stream_id: str, encoded: str) -> bool:
+        """向指定会话发送一张图片（base64）。"""
+
+        send = getattr(self.ctx, "send", None)
+        image = getattr(send, "image", None) if send is not None else None
+        if not callable(image):
+            logger.debug("当前宿主不支持发送图片，跳过封面")
+            return False
+        try:
+            result = await image(encoded, stream_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("发送封面图失败（%s）：%s", stream_id, exc)
+            return False
+        return self._send_result_ok(result, stream_id, label="封面图")
+
+    async def _download_cover(self, url: str) -> Optional[bytes]:
+        """下载封面图；失败或太大就返回 None（退回纯文字）。"""
+
+        link = str(url or "").strip()
+        if not link:
+            return None
+        if link.startswith("//"):
+            link = "https:" + link
+        try:
+            async with httpx.AsyncClient(
+                timeout=float(self.config.advanced.request_timeout_seconds),
+                follow_redirects=True,
+            ) as client:
+                response = await client.get(
+                    link,
+                    headers={
+                        "Referer": "https://www.bilibili.com/",
+                        "User-Agent": self.config.advanced.user_agent,
+                    },
+                )
+                if response.status_code >= 400:
+                    logger.debug(
+                        "封面下载失败（HTTP %s）：%s", response.status_code, link
                     )
-                    return False
-                return True
+                    return None
+                data = response.content
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("封面下载失败（%s）：%s", link, exc)
+            return None
+        if not data:
+            return None
+        if len(data) > _MAX_COVER_BYTES:
+            logger.debug("封面太大（%s 字节），跳过：%s", len(data), link)
+            return None
+        return data
+
+    def _route_for(self, stream_id: str) -> Dict[str, str]:
+        """找到某个会话对应的真实群号 / QQ 号（卡片直发要用）。"""
+
+        candidates: List[str] = [str(stream_id or "").strip()]
+        if stream_id in self._stream_overrides:
+            candidates.append(self._stream_overrides[stream_id])
+        candidates.extend(self._stream_fallbacks.get(stream_id, ()) or ())
+        for candidate in candidates:
+            route = self._stream_routes.get(str(candidate or "").strip())
+            if route and (route.get("group_id") or route.get("user_id")):
+                return route
+        return {}
+
+    async def _send_card(self, stream_id: str, video: Video, *, caption: str = "") -> bool:
+        """把分享发成 QQ 小程序卡片（直连 QQ 客户端的 OneBot HTTP）。"""
+
+        card_cfg = getattr(self.config, "card", None)
+        api_base = str(getattr(card_cfg, "api_base", "") or "").strip()
+        if not api_base:
+            logger.info("分享形式是 card，但「卡片直发」里没填 OneBot HTTP 地址，改发图文")
+            return False
+        route = self._route_for(stream_id)
+        group_id = route.get("group_id", "")
+        user_id = route.get("user_id", "")
+        if not group_id and not user_id:
+            logger.info("拿不到会话 %s 的群号 / QQ 号，改发图文", stream_id)
+            return False
+        payload = build_card_payload(
+            str(getattr(card_cfg, "card_kind", "miniapp") or "miniapp"),
+            title=video.title,
+            jump_url=video.url,
+            cover=video.cover,
+            desc=video.owner or video.description,
+            pub_time=video.pubdate,
+        )
+        if not payload:
+            logger.info("视频 %s 缺封面，拼不出卡片，改发图文", video.bvid)
+            return False
+        if caption:
+            await self._send_text(stream_id, caption)
+        ok, detail = await send_json_card(
+            api_base,
+            str(getattr(card_cfg, "access_token", "") or ""),
+            group_id=group_id,
+            user_id=user_id,
+            payload=payload,
+            timeout=float(getattr(card_cfg, "timeout_seconds", 8.0) or 8.0),
+        )
+        if ok:
+            logger.info("已用卡片分享 %s：%s", video.bvid, detail)
+        else:
+            logger.warning("卡片分享失败（%s）：%s", video.bvid, detail)
+        return ok
+
+    async def _send_image_parts(
+        self,
+        stream_id: str,
+        video: Video,
+        line: str,
+        header: str,
+        stats: str = "",
+    ) -> bool:
+        """封面图 + 一句文字（图文分享）。"""
+
+        caption = f"{line} {header}" if line else header
+        if stats:
+            caption = caption + "\n" + stats
+        sent_image = False
+        data = await self._download_cover(video.cover)
+        if data:
+            sent_image = await self._send_image(stream_id, data)
+        if await self._send_text(stream_id, caption):
             return True
-        return bool(result)
+        return sent_image
 
     async def _send_parts(
         self,
@@ -1721,7 +1987,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         *,
         kind: str = "auto",
     ) -> bool:
-        """发送分享消息：一句随口的话 + 【标题】链接，合成一条。
+        """发送分享：按配置选文字 / 封面图文 / 小程序卡片，失败逐级回退。
 
         赤石（kind="shiwei"）不带文案，只发标题链接。
         """
@@ -1729,12 +1995,27 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         config = self.config
         line = "" if kind == "shiwei" else (narrative or "").strip()
         header = format_share_header(video)
-        message = f"{line} {header}" if line else header
+        stats = ""
         if config.share.include_stats_line:
-            message += (
-                f"\n🔥 {video.play} 播放 · {video.like} 点赞"
+            stats = (
+                f"🔥 {video.play} 播放 · {video.like} 点赞"
                 + (f" · UP：{video.owner}" if video.owner else "")
             )
+        caption = f"{line} {header}" if line else header
+        message = f"{caption}\n{stats}" if stats else caption
+        style = self._share_style()
+        if style == "card":
+            card_caption = line if getattr(config.share, "card_caption", True) else ""
+            if await self._send_card(stream_id, video, caption=card_caption):
+                return True
+            if getattr(config.card, "fallback_to_image", True):
+                if await self._send_image_parts(stream_id, video, line, header, stats):
+                    return True
+            return await self._send_text(stream_id, message)
+        if style == "image":
+            if await self._send_image_parts(stream_id, video, line, header, stats):
+                return True
+            return await self._send_text(stream_id, message)
         return await self._send_text(stream_id, message)
 
     # -- 主动搜索 ------------------------------------------------------

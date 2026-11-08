@@ -5,6 +5,46 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.5.1] - 2026-11-08
+
+卡片直发兼容 SnowLuma（它只实现通用 `send_msg`）。
+
+### 修复
+
+- **`share_card.send_json_card` 会换动作重发**：群聊先 `send_group_msg`、私聊先 `send_private_msg`，被回「不认识的动作」时自动改用 `send_msg` + `message_type=group|private` 再发一次。判定看 `retcode`（`1404` / `404`）或提示文字里的 `unknown action` / `unsupported` / `不支持`；风控、限流等其它失败直接返回，不会重复发消息。
+- **群号 / QQ 号转整数**：新增 `share_card._coerce_id`，纯数字串在发请求前转成 `int`（SnowLuma 对字符串 id 不保证接受）。
+- 网络异常时每次都记日志，最终仍返回 `请求失败：<原因>`，外层回退链照常退到图文 / 文字。
+
+### 变更
+
+- `_manifest.json` 的 `version` 与 `config.py` 的 `config_version` 升到 `1.5.1`。
+- README 的 `[card]` 一节补上 SnowLuma 的具体填法：默认 OneBot HTTP 就是 `0.0.0.0:3000`（路径 `/`），Token 在 `config/onebot.json` / `config/onebot_<uin>.json` 的 `accessToken`，Docker 部署要映射 `3000`（WebUI `5099`、WS `3001`）。
+- 测试：`tests/test_share_style.py` 新增 6 个用例——`_coerce_id`、`_looks_unsupported`、群聊与私聊自动改用 `send_msg`、风控不重发、网络异常文案。
+
+## [1.5.0] - 2026-11-08
+
+活跃时段支持多段（给午休留空档），分享形式可选文字 / 封面图文 / QQ 小程序卡片。
+
+### 新增
+
+- **`[schedule].active_hours` 支持多段**：用逗号分隔多个时段（`，` / `;` / `；` / `、` / `|` 也认），如 `08:00-11:30, 13:00-21:00`，中间的空档不分享——麦麦午休、上课这类时段终于能跳过。单段仍支持跨午夜（`22:00-02:00`）；某一段写错格式时整轮按「全天」处理并打 WARNING，避免一个笔误把分享全关掉。
+- **`[share].style` 分享形式**（`text` / `image` / `card`）：`image` 先发视频封面图再发文字；`card` 直接发 QQ 小程序卡片。`[share].card_caption` 控制卡片前要不要先发那句随口话。
+- **`[card]` 配置节 + `share_card.py`**：`api_base`（QQ 客户端的 OneBot HTTP 地址）、`access_token`、`card_kind`（`miniapp` / `news`）、`fallback_to_image`、`timeout_seconds`。`share_card.py` 负责拼 `com.tencent.miniapp_01` / `com.tencent.structmsg` 卡片 JSON、包成 OneBot `json` 段，再直连 `/send_group_msg` 或 `/send_private_msg` 发送；Bearer 被 401 / 403 挡回时自动改走 `?access_token=`。
+- **`Video.cover`**：读 B 站接口的 `pic` 封面字段（自动补 `https://`），图文与卡片都用它。
+- **测试**：新增 `tests/test_share_style.py`（28 个用例）——多段时段解析与跨午夜 / 午休判定、卡片 JSON 结构与 OneBot 地址拼装、三种分享形式的分派与逐级回退。
+
+### 变更
+
+- 发送层重写为统一的重试骨架（`_send_with_fallback` / `_send_result_ok`），`_send_text` / `_send_image` / `_send_card` 共用「换会话重试、记住可用会话」逻辑；新增 `_register_stream_route` 记录聊天流 → 群号 / QQ 号的对应关系，卡片模式靠它找发送目标。
+- `_manifest.json` 的 `capabilities` 新增 `send.image`（发封面图要用），`version` 与 `config_version` 升到 `1.5.0`。
+- 卡片直发失败时日志不再只有空串：新增 `share_card.error_text`，`httpx` 的连接错误会退化成异常名 / `HTTP <状态码>`，排查时能看出是端口不通还是被拒。
+
+### 说明
+
+- **为什么卡片要插件直发**：麦麦主程序与 SnowLuma / NapCat 适配器的出站段编码器都把未知段（含 OneBot `json`）降级成 `[unsupported:json]` 文本，只有入站方向能解析卡片。所以 `json` 卡片必须绕开宿主发送链路、直接连 QQ 客户端的 OneBot HTTP。
+- 回退链：`card` 失败且 `fallback_to_image` 为真 → 图文；图文也失败（没封面 / 下载失败）→ 纯文字。任何情况下都不会因为样式问题不发消息。
+- 卡片直发没配置、QQ 客户端没开 HTTP 服务、或端口不通时，`card` 会退到图文或文字，日志里会写明原因。
+
 ## [1.4.0] - 2026-11-08
 
 新增「学梗入库」：从视频里学到梗，整理成梗卡写进麦麦的黑话库（`Jargon` 表），之后聊天里命中这个梗麦麦会自然用上。默认关闭，按需打开。

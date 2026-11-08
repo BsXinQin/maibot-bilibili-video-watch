@@ -10,7 +10,7 @@
 # 启用插件 —— 是否启用沁の刷B站视频
 enabled = true
 # 配置版本
-config_version = "1.4.0"
+config_version = "1.5.1"
 
 [schedule]
 # 刷取间隔（分钟） —— 每隔多少分钟自动刷一次 B 站：1=每分钟，60=每小时，1440=每天（可调范围 1 分钟 ~ 24 小时）
@@ -19,7 +19,7 @@ interval_minutes = 60
 jitter_seconds = 120
 # 启动时先刷一轮 —— 插件加载后是否立刻先刷一轮
 run_on_start = true
-# 活跃时段 —— 允许自动分享的时间段，如 08:00-23:30；留空表示全天允许
+# 活跃时段（可多段） —— 允许自动分享的时间段，多段用逗号隔开（可以给午休留空档），如 08:00-11:30, 13:00-21:00；留空表示全天
 active_hours = ""
 # 每轮最多分享（个） —— 每个聊天流每轮最多分享几个视频
 max_share_per_round = 1
@@ -233,10 +233,26 @@ style_hint = ""
 cache_seconds = 120
 
 [share]
+# 分享形式 —— text=一条文字；image=封面图 + 文字；card=QQ 小程序卡片（需要在下面 [card] 里填地址，发不出去会自动退回图文）
+style = "text"
+# 卡片前先发一句话 —— 分享形式为 card 时，是否在卡片前面先发那句随口话
+card_caption = true
 # 随口一句字数上限 —— 分享时那句随口话的最大字数（超长会截断）
 casual_max_chars = 60
 # 附带视频信息 —— 是否在标题链接后面附带播放量 / 点赞 / UP 主信息
 include_stats_line = false
+
+[card]
+# OneBot HTTP 地址 —— QQ 客户端（NapCat / SnowLuma）的 HTTP 接口地址，默认端口都是 3000，如 http://172.23.0.2:3000；只发文字时不用填
+api_base = ""
+# 访问令牌 —— 上面那个接口的 Token，没设置就留空；SnowLuma 的 token 在它配置的 onebot_<uin>.json 里（accessToken）
+access_token = ""
+# 卡片类型 —— miniapp=小程序卡片（要封面图）；news=通用图文卡片
+card_kind = "miniapp"
+# 失败退回图文 —— 卡片发不出去时，是否改发「封面图 + 文字」
+fallback_to_image = true
+# 超时（秒） —— 请求 OneBot 接口的超时秒数
+timeout_seconds = 8.0
 
 [shiwei]
 # 启用赤石视频 —— 是否启用赤石视频工具（由麦麦在聊天里自行调用）

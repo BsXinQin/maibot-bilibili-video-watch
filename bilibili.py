@@ -175,6 +175,21 @@ def _as_str(value: Any, default: str = "") -> str:
     return str(value)
 
 
+def _normalize_cover(value: str) -> str:
+    """把 B 站返回的封面地址修成 http(s)：接口常给 ``//i0.hdslb.com/...``。"""
+
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("//"):
+        return "https:" + text
+    if text.startswith("http://"):
+        return "https://" + text[len("http://"):]
+    if text.startswith("https://"):
+        return text
+    return ""
+
+
 def strip_em(value: str) -> str:
     """去掉搜索结果标题里的 ``<em class="keyword">`` 高亮标签并反转义 HTML 实体。"""
 
@@ -246,6 +261,8 @@ class Video:
     tags: str = ""
     cid: int = 0
     source: str = ""
+    # 封面地址（B 站常给 "//i0.hdslb.com/..." 这种协议相对地址，用 normalize_cover 修）
+    cover: str = ""
 
     @property
     def url(self) -> str:
@@ -291,6 +308,7 @@ class Video:
             reply=_as_int(stat.get("reply")),
             danmaku=_as_int(stat.get("danmaku")),
             source=source,
+            cover=_normalize_cover(_as_str(raw.get("pic"))),
         )
 
     @classmethod
@@ -322,6 +340,7 @@ class Video:
             danmaku=_as_int(raw.get("video_review")),
             tags=_as_str(raw.get("tag")).strip(),
             source=source,
+            cover=_normalize_cover(_as_str(raw.get("pic"))),
         )
 
 

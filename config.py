@@ -43,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.4.0",
+        default="1.5.1",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -77,8 +77,14 @@ class ScheduleConfig(PluginConfigBase):
     )
     active_hours: str = Field(
         default="",
-        description="允许自动分享的时间段，如 08:00-23:30；留空表示全天允许",
-        json_schema_extra={"label": "活跃时段", "placeholder": "08:00-23:30"},
+        description=(
+            "允许自动分享的时间段，支持多段（逗号隔开，可以给午休留空档）："
+            "如 08:00-11:30, 13:00-21:00。留空表示全天；跨午夜写成 22:00-02:00"
+        ),
+        json_schema_extra={
+            "label": "活跃时段（可多段）",
+            "placeholder": "08:00-11:30, 13:00-21:00",
+        },
     )
     max_share_per_round: int = Field(
         default=1,
@@ -641,6 +647,20 @@ class ShareConfig(PluginConfigBase):
     __ui_icon__ = "send"
     __ui_order__ = 11
 
+    style: str = Field(
+        default="text",
+        description=(
+            "分享形式（填下面的英文）：text=文字（【标题】链接，默认）；"
+            "image=封面图 + 文字；card=QQ 小程序卡片"
+            "（card 需要在「卡片直发」里填好 QQ 客户端的 OneBot HTTP 接口，否则自动退回图文）"
+        ),
+        json_schema_extra={"label": "分享形式（text / image / card）", "placeholder": "text"},
+    )
+    card_caption: bool = Field(
+        default=True,
+        description="分享形式为 card 时，是否在卡片前面先发那句随口话",
+        json_schema_extra={"label": "卡片前先发一句话"},
+    )
     casual_max_chars: int = Field(
         default=60,
         ge=20,
@@ -652,6 +672,54 @@ class ShareConfig(PluginConfigBase):
         default=False,
         description="是否在标题链接后面附带播放量 / 点赞 / UP 主信息",
         json_schema_extra={"label": "附带视频信息"},
+    )
+
+
+class CardConfig(PluginConfigBase):
+    """小程序卡片直发：绕过主程序的段格式限制，直接调 QQ 客户端的 OneBot HTTP。
+
+    麦麦和它带的 QQ 适配器都不透传 OneBot 的 ``json`` 段（会被降级成
+    ``[unsupported:json]`` 文本），所以想发真正的小程序卡片，只能由插件
+    自己 POST 到 QQ 客户端（NapCat / SnowLuma）的 OneBot HTTP 接口。
+    """
+
+    __ui_label__ = "卡片直发"
+    __ui_icon__ = "credit-card"
+    __ui_order__ = 12
+
+    api_base: str = Field(
+        default="",
+        description=(
+            "QQ 客户端（NapCat / SnowLuma）的 OneBot HTTP 接口，两边默认端口都是 3000，例如 "
+            "http://172.23.0.2:3000；SnowLuma 的 token 见它配置里 onebot_<uin>.json 的 accessToken。"
+            "留空则「分享形式=card」自动退回封面图 + 文字"
+        ),
+        json_schema_extra={"label": "OneBot HTTP 地址", "placeholder": "http://172.23.0.2:3000"},
+    )
+    access_token: str = Field(
+        default="",
+        description="OneBot HTTP 的 access_token；QQ 客户端没设就留空",
+        json_schema_extra={"label": "access_token", "secret": True},
+    )
+    card_kind: str = Field(
+        default="miniapp",
+        description=(
+            "卡片样式：miniapp=B 站小程序卡片（和手机上分享一模一样，最像；"
+            "个别 QQ 版本可能不显示）；news=通用图文卡片（更保底，任何版本都能显示）"
+        ),
+        json_schema_extra={"label": "卡片样式（miniapp / news）", "placeholder": "miniapp"},
+    )
+    fallback_to_image: bool = Field(
+        default=True,
+        description="卡片发不出去时，是否自动退成「封面图 + 文字」再发一次",
+        json_schema_extra={"label": "失败退回图文"},
+    )
+    timeout_seconds: float = Field(
+        default=8.0,
+        ge=1.0,
+        le=30.0,
+        description="请求 OneBot HTTP 接口的超时",
+        json_schema_extra={"label": "请求超时（秒）"},
     )
 
 
@@ -1089,6 +1157,10 @@ class BilibiliInterestShareConfig(PluginConfigBase):
     share: ShareConfig = Field(
         default_factory=ShareConfig,
         description="分享格式（随口一句 + 标题链接）",
+    )
+    card: CardConfig = Field(
+        default_factory=CardConfig,
+        description="小程序卡片直发（分享形式选 card 时才用；直连 QQ 客户端的 OneBot HTTP）",
     )
     shiwei: ShiweiConfig = Field(
         default_factory=ShiweiConfig,
