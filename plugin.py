@@ -2332,6 +2332,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             danmaku_limit=resolved_danmaku_limit,
             use_subtitle=bool(config.read.use_subtitle),
             subtitle_chars=resolved_subtitle_chars,
+            use_ai_summary=bool(getattr(config.read, "use_ai_summary", True)),
             cache=self._ensure_read_cache(),
         )
         return brief, render_brief(
@@ -2342,7 +2343,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         "bili_read",
         description=(
             "读取一个 B 站视频的真实内容：标题、UP 主、分区、时长、简介、分P、标签、"
-            "CC 字幕、热门评论与弹幕采样。用户贴了 B 站链接、或者问「这个视频讲了什么」"
+            "CC 字幕、热门评论与弹幕采样，以及 B 站官方的 AI 总结（摘要 + 章节要点 + ASR 逐句时间轴，有就用）。用户贴了 B 站链接、或者问「这个视频讲了什么」"
             "「值不值得看」时，先调用它拿到内容，不要凭标题猜。"
             "它一次调用通常 1 秒内返回，在当前对话里直接调用即可，不需要交给子代理；"
             "如果上下文里已经有这个视频的读取结果，就不用重复读。"

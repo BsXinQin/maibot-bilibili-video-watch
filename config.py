@@ -43,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.5.6",
+        default="1.6.0",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -972,6 +972,14 @@ class ReadConfig(PluginConfigBase):
         default=True,
         description="读取 CC 字幕（需要登录 Cookie 才有字幕）",
         json_schema_extra={"label": "读取字幕"},
+    )
+    use_ai_summary: bool = Field(
+        default=True,
+        description=(
+            "读取 B 站官方的 AI 视频总结与章节要点（需要登录 Cookie）。"
+            "B 站服务端预生成的总结，比只看简介准确得多；视频没有总结时自动退回字幕 / 简介"
+        ),
+        json_schema_extra={"label": "读取官方 AI 总结"},
     )
     max_chars: int = Field(
         default=3500,

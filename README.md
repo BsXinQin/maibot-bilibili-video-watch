@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.5.6-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.6.0-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v1.5.6** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
+> 当前版本 **v1.6.0** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档，还能吃到 B 站官方 AI 总结与章节要点 · 能把视频里的梗学进黑话库
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -171,7 +171,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.5.6"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.6.0"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -443,6 +443,7 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 | `comment_limit` | `8` | 读几条热评（`0`~`20`） |
 | `danmaku_limit` | `30` | 采样多少条弹幕（`0`~`100`） |
 | `use_subtitle` | `true` | 是否读 CC 字幕（需要登录 Cookie） |
+| `use_ai_summary` | `true` | 是否读 B 站官方 AI 总结（`x/web-interface/view/conclusion/get`）：一次拿到摘要 + 章节要点 + ASR 逐句时间轴，比只看简介准得多。需要登录 Cookie；视频没有总结时自动退回 CC 字幕 / 简介 |
 | `max_chars` | `3500` | 交给模型的内容上限，太长会按顺序截断 |
 | `cache_seconds` | `900` | 同一个视频多少秒内复用缓存（也用作自动读的防重复窗口） |
 
@@ -707,6 +708,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v1.6.0**：`bili_read` 接入 B 站**官方 AI 总结**（`view/conclusion/get`，WBI 签名 + 登录 Cookie）：一次拿到摘要、章节要点、ASR 逐句时间轴，深度读时按 `[mm:ss]` 展开，没有 CC 字幕的视频也能有「第几分钟在讲什么」；新增配置 `[read].use_ai_summary`（默认开）
 - **v1.5.6**：没回执时先回查群历史（`get_group_msg_history`），卡片已经在群里就算成功、不再重发，避免 1.5.5 的换版重试把同一张卡发两遍；新增配置 `[card].verify_history`
 - **v1.5.5**：修「卡片发出去但 QQ 说没有回执」。SnowLuma 对群消息做严格回执校验，带 `bthirdappforward` 的卡片常常只拿到 `result=0` 而没有 `message_id`，于是报 `group message delivery was not confirmed: QQ returned no message receipt`，插件以为失败、又补一遍图文。现在 `build_miniapp_payload()` 支持 `forward` 开关、新增 `apply_forward_flags()` / `miniapp_variants()`：**默认先发不带转发标记的版本**，被回「没回执」时自动换另一种版本重发一次（风控之类的真失败不重发，避免重复）。新增配置 `[card].miniapp_forward`。（1.5.6 起换版前会先回查群历史，防止其实已发出却又发一遍）
 - **v1.5.4**：小程序卡片改成「按真卡片复刻」。用户在 QQ 里自己转发 B 站视频拿到原始 `json`（`appID=100951776`、`view=view_8C8E89B49BE609866298ADDFF2DBABA4`、`config.token`、`bthirdappforward`），据此重写 `build_miniapp_payload()`：外层补齐 `appID` / `view_<分享模板ID>` / `config.forward` / `bthirdappforward` / `bthirdappforwardforbackendswitch`，`meta.detail_1` 补齐 `appid`(字符串) / `shareTemplateId` / `qqdocurl` / `shareTemplateData` / `scene` / `host` / `showLittleTail` / `shareOrigin` / `url`(m.q.qq.com)，并把 B 站小程序图标换成手机卡片用的那张。新增 `fill_miniapp_payload()`：官方通道返回的卡片只补空字段，合法的 `view_<模板ID>` + `appID` 才允许接管结构。`miniapp` 不再强制要封面。

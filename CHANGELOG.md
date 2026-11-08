@@ -5,6 +5,28 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.6.0] - 2026-11-08
+
+### 新增
+
+- **读官方 AI 总结**：`bili_read` 现在会顺带读 B 站服务端的官方 AI 总结（`x/web-interface/view/conclusion/get`，需要 WBI 签名与登录 Cookie），一次拿到三样东西：
+  - `model_result.summary`：整条视频的摘要（几百字，比简介准得多，已剥掉 `<mark>` 标签）；
+  - `model_result.outline`：章节要点（每段标题 + 时间点 + 要点，深度读时按 `[mm:ss]` 列出）；
+  - `model_result.subtitle`：官方 ASR 逐句时间轴 —— **没有 CC 字幕的视频也能有「第几分钟在讲什么」**。
+- 新增 `bilibili.fetch_ai_conclusion(bvid, cid=, up_mid=)`（走 `_signed_get_json`，拿不到时安静返回 `{}`，不抛异常）与 `fetch_video_bundle(ai_summary=True)`。
+- 新增纯函数 `bili_read.parse_ai_conclusion(data)`：解析摘要 / 章节要点 / ASR 段落，带长度上限，视频没有总结（`data.code=-1`）时返回空结构。
+- `VideoBrief` 新增 `ai_summary` / `ai_outline` / `ai_segments`，`to_dict()` 带 `has_ai_summary` 等字段。
+- 新增配置 `[read].use_ai_summary`（默认 `true`）。brief 与 full 都会显示摘要；章节要点与 ASR 时间轴只在 full 展开。CC 字幕缺失时，深度读自动改用官方 ASR 时间轴（标签写「字幕时间轴（官方 ASR，…）」）。
+
+### 修复
+
+- 深度读不再因为视频没有 CC 字幕就完全没有时间轴：官方 ASR 兜底后，「第几分钟讲了什么」这类问题依然能答。
+- 缓存键加上 `|a1` 区分是否带官方总结（同一视频的 brief/full 与有无总结各存一份，不会串）。
+
+### 说明
+
+- 官方总结接口未登录时返回 `code=-403 访问权限不足`，插件按「没有总结」处理，退回 CC 字幕 / 简介，不影响整条视频的读取。
+- 这个能力不是「解析画面」：它是 B 站服务端预生成好的总结，所以准、快，但只对 B 站已经生成过总结的视频有效（实测热门视频覆盖率高，仍不是 100%）。
 ## [1.5.6] - 2026-11-08
 
 ### 修复

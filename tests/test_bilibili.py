@@ -526,3 +526,115 @@ class BilibiliClientTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AiConclusionTests(unittest.IsolatedAsyncioTestCase):
+    """官方 AI 总结接口（需要 WBI 签名）的读取行为。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = load_submodule("bilibili")
+
+    @staticmethod
+    def _wbi_payload() -> dict:
+        return {
+            "code": 0,
+            "data": {
+                "wbi_img": {
+                    "img_url": "https://i0.hdslb.com/bfs/wbi/" + "a" * 32 + ".png",
+                    "sub_url": "https://i0.hdslb.com/bfs/wbi/" + "b" * 32 + ".png",
+                }
+            },
+        }
+
+    async def test_reads_conclusion_with_wbi_signature(self) -> None:
+        seen = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "/nav" in url:
+                return httpx.Response(200, json=self._wbi_payload())
+            seen["params"] = dict(request.url.params)
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"model_result": {"summary": "讲了改动"}}},
+            )
+
+        client = self.module.BilibiliClient(
+            transport=httpx.MockTransport(handler), cookie="SESSDATA=abc123"
+        )
+        try:
+            data = await client.fetch_ai_conclusion("BV1xx411c7mD", cid=111, up_mid=42)
+        finally:
+            await client.aclose()
+        self.assertEqual(data["model_result"]["summary"], "讲了改动")
+        self.assertIn("w_rid", seen["params"])
+        self.assertIn("wts", seen["params"])
+        self.assertEqual(seen["params"].get("cid"), "111")
+        self.assertEqual(seen["params"].get("up_mid"), "42")
+
+    async def test_permission_denied_returns_empty(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "/nav" in str(request.url):
+                return httpx.Response(200, json=self._wbi_payload())
+            return httpx.Response(200, json={"code": -403, "message": "访问权限不足"})
+
+        client = self.module.BilibiliClient(transport=httpx.MockTransport(handler))
+        try:
+            data = await client.fetch_ai_conclusion("BV1xx411c7mD")
+        finally:
+            await client.aclose()
+        self.assertEqual(data, {})
+
+    async def test_empty_bvid_skips_request(self) -> None:
+        calls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(str(request.url))
+            return httpx.Response(200, json={"code": 0, "data": {}})
+
+        client = self.module.BilibiliClient(transport=httpx.MockTransport(handler))
+        try:
+            data = await client.fetch_ai_conclusion("")
+        finally:
+            await client.aclose()
+        self.assertEqual(data, {})
+        self.assertEqual(calls, [])
+
+    async def test_bundle_only_fetches_summary_when_asked(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "/nav" in url:
+                return httpx.Response(200, json=self._wbi_payload())
+            if "conclusion/get" in url:
+                return httpx.Response(
+                    200, json={"code": 0, "data": {"model_result": {"summary": "总结"}}}
+                )
+            if "view" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "code": 0,
+                        "data": _raw_video(cid=111, owner={"name": "测试UP", "mid": 42}),
+                    },
+                )
+            return httpx.Response(200, json={"code": 0, "data": {}})
+
+        client = self.module.BilibiliClient(
+            transport=httpx.MockTransport(handler), cookie="SESSDATA=abc123"
+        )
+        try:
+            plain = await client.fetch_video_bundle(
+                bvid="BV1xx411c7mD", comment_limit=0, danmaku_limit=0, subtitle_chars=0
+            )
+            with_ai = await client.fetch_video_bundle(
+                bvid="BV1xx411c7mD",
+                comment_limit=0,
+                danmaku_limit=0,
+                subtitle_chars=0,
+                ai_summary=True,
+            )
+        finally:
+            await client.aclose()
+        self.assertEqual(plain.get("ai_conclusion"), {})
+        self.assertEqual(with_ai["ai_conclusion"]["model_result"]["summary"], "总结")

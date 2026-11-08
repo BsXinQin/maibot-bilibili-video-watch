@@ -18,3 +18,4 @@ venv/
 _testout.txt
 *.zip
 _t.log
+_probe_*.py

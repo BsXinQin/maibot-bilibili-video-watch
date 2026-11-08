@@ -29,6 +29,8 @@ SHORT_HOSTS = ("b23.tv", "bili2233.cn")
 MAX_LINKS = 3
 MAX_DESC_CHARS = 300
 MAX_DANMAKU_LINE = 24
+# 官方 AI 总结里的 <mark> 等标签，读之前统一剥掉
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 class BiliReadError(RuntimeError):
@@ -158,6 +160,9 @@ class VideoBrief:
     comments: List[Tuple[str, str, int]] = field(default_factory=list)
     subtitle: str = ""
     subtitle_segments: List[Tuple[int, str]] = field(default_factory=list)
+    ai_summary: str = ""
+    ai_outline: List[Tuple[int, str, List[Tuple[int, str]]]] = field(default_factory=list)
+    ai_segments: List[Tuple[int, str]] = field(default_factory=list)
     danmaku_timeline: List[Tuple[int, str]] = field(default_factory=list)
     fetched_at: float = field(default_factory=time.time)
 
@@ -193,6 +198,9 @@ class VideoBrief:
             "danmaku": len(self.danmaku),
             "has_subtitle": bool(self.subtitle),
             "has_subtitle_timeline": bool(self.subtitle_segments),
+            "has_ai_summary": bool(self.ai_summary),
+            "ai_outline": len(self.ai_outline),
+            "ai_segments": len(self.ai_segments),
             "has_danmaku_timeline": bool(self.danmaku_timeline),
             "url": self.url,
         }
@@ -205,6 +213,84 @@ def _tags_of(data: Dict[str, Any]) -> List[str]:
     else:
         items = [part.strip() for part in str(raw or "").split(",")]
     return [item for item in items if item][:10]
+
+
+def _strip_tags(text: Any) -> str:
+    """去掉官方总结里的 <mark> 之类的 HTML 标签。"""
+
+    return _HTML_TAG_RE.sub("", str(text or "")).strip()
+
+
+def _ai_timestamp(value: Any) -> int:
+    """把接口里的秒数（可能是浮点或字符串）转成整数秒。"""
+
+    try:
+        return max(0, int(float(value or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def parse_ai_conclusion(
+    data: Any,
+    *,
+    summary_limit: int = 600,
+    max_outline: int = 8,
+    max_segments: int = 300,
+) -> Dict[str, Any]:
+    """解析官方 AI 总结接口的 data：摘要 + 章节要点 + ASR 逐句时间轴。
+
+    接口结构（实测）：data.model_result 里有 summary（带 <mark> 标签）、
+    outline（每段 title + part_outline 要点）、subtitle（ASR，每句 start_timestamp
+    + content）。视频没有总结时 data 只有 code=-1，这里统一返回空结构。
+    """
+
+    empty: Dict[str, Any] = {"summary": "", "outline": [], "segments": []}
+    if not isinstance(data, dict):
+        return empty
+    result = data.get("model_result")
+    if not isinstance(result, dict):
+        return empty
+    summary = _strip_tags(result.get("summary"))
+    if len(summary) > summary_limit:
+        summary = summary[:summary_limit].rstrip() + "……"
+    outline: List[Tuple[int, str, List[Tuple[int, str]]]] = []
+    raw_outline = result.get("outline")
+    for entry in raw_outline if isinstance(raw_outline, list) else []:
+        if len(outline) >= max(1, int(max_outline)):
+            break
+        if not isinstance(entry, dict):
+            continue
+        title = _strip_tags(entry.get("title"))
+        points: List[Tuple[int, str]] = []
+        raw_points = entry.get("part_outline")
+        for part in raw_points if isinstance(raw_points, list) else []:
+            if not isinstance(part, dict):
+                continue
+            content = _strip_tags(part.get("content"))
+            if not content:
+                continue
+            points.append((_ai_timestamp(part.get("timestamp")), content))
+        if not title and not points:
+            continue
+        outline.append((_ai_timestamp(entry.get("timestamp")), title, points))
+    segments: List[Tuple[int, str]] = []
+    raw_subtitle = result.get("subtitle")
+    for entry in raw_subtitle if isinstance(raw_subtitle, list) else []:
+        if len(segments) >= max(1, int(max_segments)):
+            break
+        if not isinstance(entry, dict):
+            continue
+        raw_parts = entry.get("part_subtitle")
+        for part in raw_parts if isinstance(raw_parts, list) else []:
+            if len(segments) >= max(1, int(max_segments)):
+                break
+            if not isinstance(part, dict):
+                continue
+            content = _strip_tags(part.get("content"))
+            if not content:
+                continue
+            segments.append((_ai_timestamp(part.get("start_timestamp")), content))
+    return {"summary": summary, "outline": outline, "segments": segments}
 
 
 def build_brief(bundle: Dict[str, Any], *, target: Optional[VideoTarget] = None) -> VideoBrief:
@@ -255,6 +341,7 @@ def build_brief(bundle: Dict[str, Any], *, target: Optional[VideoTarget] = None)
         except (TypeError, ValueError):
             seconds = 0
         subtitle_segments.append((max(0, seconds), clean))
+    ai = parse_ai_conclusion(bundle.get("ai_conclusion"))
     stats = {
         "play": int(getattr(video, "play", 0) or 0),
         "danmaku": int(getattr(video, "danmaku", 0) or 0),
@@ -281,6 +368,9 @@ def build_brief(bundle: Dict[str, Any], *, target: Optional[VideoTarget] = None)
         comments=comments,
         subtitle=str(bundle.get("subtitle") or "").strip(),
         subtitle_segments=subtitle_segments,
+        ai_summary=ai["summary"],
+        ai_outline=ai["outline"],
+        ai_segments=ai["segments"],
     )
 
 
@@ -407,15 +497,33 @@ def render_brief(brief: VideoBrief, *, max_chars: int = 3500, detail: str = "bri
         if len(desc) > desc_cap:
             desc = desc[:desc_cap].rstrip() + "……"
         lines.append("简介：" + desc)
+    if brief.ai_summary:
+        lines.append("官方 AI 总结：" + brief.ai_summary)
+    if full and brief.ai_outline:
+        lines.append("章节要点（官方 AI 总结）：")
+        for start, title, points in brief.ai_outline:
+            head = f"[{_mmss(start)}] {title}" if title else f"[{_mmss(start)}]"
+            lines.append(head)
+            for point_start, content in points[:6]:
+                lines.append(f"  · [{_mmss(point_start)}] {content[:120]}")
     if full:
         timeline = _transcript_lines(brief.subtitle_segments) if brief.subtitle_segments else []
+        asr = False
+        if not timeline and brief.ai_segments:
+            timeline = _transcript_lines(brief.ai_segments)
+            asr = True
         if timeline:
-            lines.append("字幕时间轴（[分:秒] 该时间点在说什么）：")
+            head = "（官方 ASR，[分:秒] 该时间点在说什么）：" if asr else "（[分:秒] 该时间点在说什么）："
+            lines.append("字幕时间轴" + head)
             lines.extend(timeline)
         elif brief.subtitle:
             lines.append("字幕（全文）：" + brief.subtitle)
     elif brief.subtitle:
         lines.append("字幕（节选）：" + brief.subtitle)
+    elif brief.ai_segments:
+        spoken = " ".join(text for _start, text in brief.ai_segments[:20])
+        if spoken:
+            lines.append("官方 ASR（节选）：" + spoken)
     if brief.comments:
         lines.append("热评：")
         comment_cap = 20 if full else 10
@@ -479,12 +587,15 @@ def cache_key(
     danmaku_limit: int,
     use_subtitle: bool,
     subtitle_chars: int = 0,
+    ai_summary: bool = False,
 ) -> str:
     """缓存键带上读取参数，换个参数就重新抓（深度读与摘要不能共用缓存）。"""
 
     key = f"{target.key}|c{int(comment_limit)}|d{int(danmaku_limit)}|s{1 if use_subtitle else 0}"
     if subtitle_chars:
         key += f".{int(subtitle_chars)}"
+    if ai_summary:
+        key += "|a1"
     return key
 
 
@@ -496,6 +607,7 @@ async def read_brief(
     danmaku_limit: int = 30,
     use_subtitle: bool = True,
     subtitle_chars: int = 1200,
+    use_ai_summary: bool = False,
     cache: Optional[VideoCache] = None,
 ) -> VideoBrief:
     """读取一条视频的完整资料；短链会先解析成真实地址。"""
@@ -519,6 +631,7 @@ async def read_brief(
         danmaku_limit=danmaku_limit,
         use_subtitle=use_subtitle,
         subtitle_chars=subtitle_chars if use_subtitle else 0,
+        ai_summary=bool(use_ai_summary),
     )
     if cache is not None:
         cached = cache.get(key)
@@ -532,6 +645,7 @@ async def read_brief(
             comment_limit=max(0, int(comment_limit)),
             danmaku_limit=max(0, int(danmaku_limit)),
             subtitle_chars=max(0, int(subtitle_chars)) if use_subtitle else 0,
+            ai_summary=bool(use_ai_summary),
         )
     except BilibiliError as exc:
         raise BiliReadError(f"读取视频失败：{exc}") from exc

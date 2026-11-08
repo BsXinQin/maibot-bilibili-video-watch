@@ -371,6 +371,7 @@ class ReadBriefTests(unittest.IsolatedAsyncioTestCase):
                     "comment_limit": 3,
                     "danmaku_limit": 5,
                     "subtitle_chars": 1200,
+                    "ai_summary": False,
                 }
             ],
         )
@@ -905,3 +906,156 @@ class FullReadTriggerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+AI_DATA = {
+    "code": 0,
+    "model_result": {
+        "summary": "这期讲<mark>原神新版本</mark>的三处改动，最后聊了抽卡性价比。",
+        "outline": [
+            {
+                "timestamp": 0,
+                "title": "开场与改动概览",
+                "part_outline": [
+                    {"timestamp": 12, "content": "先说结论：改动比上个版本大"},
+                    {"timestamp": 48, "content": "圣遗物词条调整"},
+                ],
+            },
+            {
+                "timestamp": 300,
+                "title": "实战演示",
+                "part_outline": [{"timestamp": 320, "content": "深渊 12 层实测"}],
+            },
+        ],
+        "subtitle": [
+            {
+                "title": "第一部分",
+                "part_subtitle": [
+                    {"start_timestamp": 0.0, "end_timestamp": 3.0, "content": "大家好"},
+                    {"start_timestamp": 3.5, "end_timestamp": 6.0, "content": "今天聊新版本"},
+                ],
+            }
+        ],
+    },
+}
+
+
+class AiSummaryParseTests(unittest.TestCase):
+    """官方 AI 总结的解析（纯函数，不联网）。"""
+
+    def test_parse_strips_html_and_keeps_outline(self) -> None:
+        parsed = READ.parse_ai_conclusion(AI_DATA)
+        self.assertEqual(
+            parsed["summary"],
+            "这期讲原神新版本的三处改动，最后聊了抽卡性价比。",
+        )
+        self.assertEqual(len(parsed["outline"]), 2)
+        start, title, points = parsed["outline"][0]
+        self.assertEqual((start, title), (0, "开场与改动概览"))
+        self.assertEqual(points[1], (48, "圣遗物词条调整"))
+        self.assertEqual(parsed["outline"][1][0], 300)
+        self.assertEqual(parsed["segments"], [(0, "大家好"), (3, "今天聊新版本")])
+
+    def test_parse_handles_missing_summary(self) -> None:
+        empty = {"summary": "", "outline": [], "segments": []}
+        self.assertEqual(READ.parse_ai_conclusion(None), empty)
+        self.assertEqual(READ.parse_ai_conclusion({"code": -1}), empty)
+        self.assertEqual(READ.parse_ai_conclusion({"model_result": "垃圾"}), empty)
+        self.assertEqual(
+            READ.parse_ai_conclusion({"model_result": {"summary": "  ", "outline": []}}),
+            empty,
+        )
+
+    def test_parse_limits_outline_and_summary(self) -> None:
+        parsed = READ.parse_ai_conclusion(AI_DATA, summary_limit=6, max_outline=1)
+        self.assertTrue(parsed["summary"].endswith("……"))
+        self.assertEqual(len(parsed["summary"]), 8)
+        self.assertEqual(len(parsed["outline"]), 1)
+
+    def test_build_brief_reads_ai_fields(self) -> None:
+        brief = READ.build_brief(sample_bundle(ai_conclusion=AI_DATA))
+        self.assertIn("原神新版本", brief.ai_summary)
+        self.assertEqual(len(brief.ai_outline), 2)
+        self.assertEqual(len(brief.ai_segments), 2)
+        self.assertTrue(brief.to_dict()["has_ai_summary"])
+        self.assertEqual(brief.to_dict()["ai_outline"], 2)
+
+    def test_build_brief_without_ai_keeps_empty(self) -> None:
+        brief = READ.build_brief(sample_bundle())
+        self.assertEqual(brief.ai_summary, "")
+        self.assertEqual(brief.ai_segments, [])
+        self.assertFalse(brief.to_dict()["has_ai_summary"])
+
+
+class AiSummaryRenderTests(unittest.TestCase):
+    """总结要出现在给模型看的正文里。"""
+
+    def test_brief_shows_summary(self) -> None:
+        brief = READ.build_brief(sample_bundle(ai_conclusion=AI_DATA))
+        text = READ.render_brief(brief)
+        self.assertIn("官方 AI 总结：", text)
+        self.assertIn("抽卡性价比", text)
+        self.assertNotIn("<mark>", text)
+        # brief 不展开章节要点，省 token
+        self.assertNotIn("章节要点", text)
+
+    def test_full_shows_outline_with_timestamps(self) -> None:
+        brief = READ.build_brief(sample_bundle(ai_conclusion=AI_DATA))
+        text = READ.render_brief(brief, detail="full")
+        self.assertIn("章节要点（官方 AI 总结）：", text)
+        self.assertIn("[00:00] 开场与改动概览", text)
+        self.assertIn("  · [00:12] 先说结论", text)
+        self.assertIn("[05:00] 实战演示", text)
+
+    def test_full_uses_cc_subtitle_first_then_asr(self) -> None:
+        with_cc = READ.build_brief(
+            sample_bundle(
+                ai_conclusion=AI_DATA,
+                subtitle="CC 字幕全文",
+                subtitle_segments=[(0, "CC 字幕全文")],
+            )
+        )
+        text_cc = READ.render_brief(with_cc, detail="full")
+        self.assertIn("字幕时间轴（[分:秒] 该时间点在说什么）：", text_cc)
+        self.assertIn("CC 字幕全文", text_cc)
+        self.assertNotIn("官方 ASR", text_cc)
+        only_asr = READ.build_brief(
+            sample_bundle(ai_conclusion=AI_DATA, subtitle="", subtitle_segments=[])
+        )
+        text_asr = READ.render_brief(only_asr, detail="full")
+        self.assertIn("字幕时间轴（官方 ASR，[分:秒] 该时间点在说什么）：", text_asr)
+        self.assertIn("今天聊新版本", text_asr)
+
+    def test_brief_uses_asr_excerpt_when_no_cc(self) -> None:
+        brief = READ.build_brief(
+            sample_bundle(ai_conclusion=AI_DATA, subtitle="", subtitle_segments=[])
+        )
+        text = READ.render_brief(brief)
+        self.assertIn("官方 ASR（节选）：", text)
+        self.assertIn("大家好 今天聊新版本", text)
+
+
+class AiSummaryReadTests(unittest.IsolatedAsyncioTestCase):
+    """read_brief 是否真的向客户端要了官方总结。"""
+
+    async def test_read_brief_requests_ai_summary(self) -> None:
+        client = _FakeReadClient(sample_bundle(ai_conclusion=AI_DATA))
+        brief = await READ.read_brief(client, READ.parse_target("BV1TEST00001"), use_ai_summary=True)
+        self.assertTrue(client.fetch_calls[0]["ai_summary"])
+        self.assertIn("原神新版本", brief.ai_summary)
+
+    async def test_read_brief_default_skips_ai_summary(self) -> None:
+        client = _FakeReadClient(sample_bundle(ai_conclusion=AI_DATA))
+        brief = await READ.read_brief(client, READ.parse_target("BV1TEST00001"))
+        self.assertFalse(client.fetch_calls[0]["ai_summary"])
+        self.assertEqual(len(client.fetch_calls), 1)
+        self.assertIsNotNone(brief)
+
+    async def test_cache_key_separates_ai_mode(self) -> None:
+        target = READ.parse_target("BV1TEST00001")
+        plain = READ.cache_key(target, comment_limit=3, danmaku_limit=5, use_subtitle=True)
+        with_ai = READ.cache_key(
+            target, comment_limit=3, danmaku_limit=5, use_subtitle=True, ai_summary=True
+        )
+        self.assertNotEqual(plain, with_ai)
+        self.assertTrue(with_ai.endswith("|a1"))
