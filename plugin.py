@@ -81,7 +81,8 @@ try:  # 宿主正常按包加载插件
     )
     from .persona import PersonaProvider
     from .share_card import build_payload as build_card_payload
-    from .share_card import send_json_card
+    from .share_card import check_card_message, fetch_mini_app_ark, recall_message
+    from .share_card import send_json_card, send_json_card_ex
     from .store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
     from .textfilter import filter_comments, filter_danmaku
 except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回同级导入
@@ -132,7 +133,8 @@ except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回
     )
     from persona import PersonaProvider
     from share_card import build_payload as build_card_payload
-    from share_card import send_json_card
+    from share_card import check_card_message, fetch_mini_app_ark, recall_message
+    from share_card import send_json_card, send_json_card_ex
     from store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
     from textfilter import filter_comments, filter_danmaku
 
@@ -1931,32 +1933,56 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         if not group_id and not user_id:
             logger.info("拿不到会话 %s 的群号 / QQ 号，改发图文", stream_id)
             return False
-        payload = build_card_payload(
-            str(getattr(card_cfg, "card_kind", "miniapp") or "miniapp"),
-            title=video.title,
-            jump_url=video.url,
-            cover=video.cover,
-            desc=video.owner or video.description,
-            pub_time=video.pubdate,
-        )
+        kind = str(getattr(card_cfg, "card_kind", "miniapp") or "miniapp").strip().lower()
+        token = str(getattr(card_cfg, "access_token", "") or "")
+        timeout = float(getattr(card_cfg, "timeout_seconds", 8.0) or 8.0)
+        desc = video.owner or video.description
+        payload: Dict[str, Any] = {}
+        if kind != "news" and bool(getattr(card_cfg, "use_official_ark", True)):
+            payload = await fetch_mini_app_ark(
+                api_base,
+                token,
+                title=video.title,
+                jump_url=video.url,
+                cover=video.cover,
+                desc=desc,
+                timeout=timeout,
+            )
+        if not payload:
+            payload = build_card_payload(
+                kind,
+                title=video.title,
+                jump_url=video.url,
+                cover=video.cover,
+                desc=desc,
+                pub_time=video.pubdate,
+            )
         if not payload:
             logger.info("视频 %s 缺封面，拼不出卡片，改发图文", video.bvid)
             return False
         if caption:
             await self._send_text(stream_id, caption)
-        ok, detail = await send_json_card(
+        ok, detail, message_id = await send_json_card_ex(
             api_base,
-            str(getattr(card_cfg, "access_token", "") or ""),
+            token,
             group_id=group_id,
             user_id=user_id,
             payload=payload,
-            timeout=float(getattr(card_cfg, "timeout_seconds", 8.0) or 8.0),
+            timeout=timeout,
         )
-        if ok:
-            logger.info("已用卡片分享 %s：%s", video.bvid, detail)
-        else:
+        if not ok:
             logger.warning("卡片分享失败（%s）：%s", video.bvid, detail)
-        return ok
+            return False
+        logger.info("已用卡片分享 %s：%s", video.bvid, detail)
+        if message_id and bool(getattr(card_cfg, "verify_send", True)):
+            verdict = await check_card_message(api_base, token, message_id, timeout=min(timeout, 5.0))
+            if verdict is False:
+                logger.warning(
+                    "卡片被 QQ 降级成文本（%s，message_id=%s），撤回并改发图文", video.bvid, message_id
+                )
+                await recall_message(api_base, token, message_id, timeout=min(timeout, 5.0))
+                return False
+        return True
 
     async def _send_image_parts(
         self,

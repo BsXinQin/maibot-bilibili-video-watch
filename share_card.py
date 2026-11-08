@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -25,6 +25,17 @@ BILIBILI_ICON = "https://www.bilibili.com/favicon.ico"
 # 标题/简介的长度上限（太长 QQ 会截断，先自己截干净）
 MAX_TITLE_CHARS = 60
 MAX_DESC_CHARS = 80
+# SnowLuma 专有动作：用官方 oidb 通道现生成一张真卡片（NapCat 没有）
+MINIAPP_ARK_ACTION = "get_mini_app_ark"
+# QQ 把卡片丢掉的证据：它会用这些文案顶替原来那条消息
+DEGRADED_MARKERS = (
+    "发送者版本过低",
+    "版本过低",
+    "无法展示内容",
+    "[unsupported",
+    "请升级到最新版",
+    "请使用最新版本",
+)
 
 
 def normalize_cover(url: str) -> str:
@@ -344,7 +355,7 @@ def _looks_unsupported(data: Any) -> bool:
     return "action" in text and ("未知" in text or "unknown" in text)
 
 
-async def send_json_card(
+async def send_json_card_ex(
     api_base: str,
     access_token: str = "",
     *,
@@ -352,18 +363,18 @@ async def send_json_card(
     user_id: str = "",
     payload: Dict[str, Any],
     timeout: float = 8.0,
-) -> Tuple[bool, str]:
-    """把卡片直发给 QQ 客户端；返回 ``(是否成功, 说明)``。"""
+) -> Tuple[bool, str, str]:
+    """把卡片直发给 QQ 客户端；返回 ``(是否成功, 说明, message_id)``。"""
 
     base = (api_base or "").strip()
     if not base:
-        return False, "没有配置 OneBot HTTP 地址"
+        return False, "没有配置 OneBot HTTP 地址", ""
     if not payload:
-        return False, "卡片内容是空的"
+        return False, "卡片内容是空的", ""
     target = _coerce_id(group_id)
     user = _coerce_id(user_id)
     if not target and not user:
-        return False, "没有可用的群号或 QQ 号"
+        return False, "没有可用的群号或 QQ 号", ""
     segment = build_json_segment(payload)
     if target:
         attempts = [
@@ -386,15 +397,173 @@ async def send_json_card(
             logger.warning("小程序卡片直发失败（%s）：%s", url, detail)
             if index + 1 < len(attempts):
                 continue
-            return False, "请求失败：" + detail[:200]
+            return False, "请求失败：" + detail[:200], ""
         if response_ok(data):
             detail = response_detail(data)
             logger.info("小程序卡片已发送（%s）：%s", action, detail)
-            return True, detail
+            return True, detail, _message_id(data)
         detail = response_detail(data)
         if index + 1 < len(attempts) and _looks_unsupported(data):
             logger.info("接口不认识 %s，改用 send_msg 再试：%s", action, detail)
             continue
         logger.warning("小程序卡片直发被拒绝（%s）：%s", url, detail)
-        return False, detail
-    return False, detail
+        return False, detail, ""
+    return False, detail, ""
+
+
+def _message_id(data: Any) -> str:
+    """从 send_*_msg 的返回里取出 message_id（回查要用）。"""
+
+    if not isinstance(data, dict):
+        return ""
+    inner = data.get("data")
+    if isinstance(inner, dict):
+        for key in ("message_id", "msg_id"):
+            value = inner.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return ""
+
+
+def _flatten_text(value: Any, depth: int = 0) -> str:
+    """把接口返回里所有字符串拼成一坨，方便找关键词。"""
+
+    if depth > 6:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return " ".join(_flatten_text(item, depth + 1) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return " ".join(_flatten_text(item, depth + 1) for item in value)
+    return ""
+
+
+def looks_degraded(data: Any) -> bool:
+    """判断一条消息是不是「卡片被 QQ 丢掉后的兜底文本」。"""
+
+    text = _flatten_text(data)
+    if not text:
+        return False
+    return any(marker in text for marker in DEGRADED_MARKERS)
+
+
+async def send_json_card(
+    api_base: str,
+    access_token: str = "",
+    *,
+    group_id: str = "",
+    user_id: str = "",
+    payload: Dict[str, Any],
+    timeout: float = 8.0,
+) -> Tuple[bool, str]:
+    """把卡片直发给 QQ 客户端；返回 ``(是否成功, 说明)``。"""
+
+    ok, detail, _ = await send_json_card_ex(
+        api_base,
+        access_token,
+        group_id=group_id,
+        user_id=user_id,
+        payload=payload,
+        timeout=timeout,
+    )
+    return ok, detail
+
+
+async def fetch_mini_app_ark(
+    api_base: str,
+    access_token: str = "",
+    *,
+    title: str,
+    jump_url: str,
+    cover: str = "",
+    desc: str = "",
+    timeout: float = 8.0,
+) -> Dict[str, Any]:
+    """让 SnowLuma 用官方 oidb 通道现生成一张 B 站小程序卡片。
+
+    只有 SnowLuma 提供 ``get_mini_app_ark``（NapCat 没有），失败一律返回
+    ``{}``，由调用方退回本地拼的 payload。
+    """
+
+    base = (api_base or "").strip()
+    clean_title = clean_text(title, MAX_TITLE_CHARS)
+    clean_url = (jump_url or "").strip()
+    if not base or not clean_title or not clean_url:
+        return {}
+    body: Dict[str, Any] = {"type": "bili", "title": clean_title, "jumpUrl": clean_url}
+    clean_desc = clean_text(desc, MAX_DESC_CHARS)
+    if clean_desc:
+        body["desc"] = clean_desc
+    clean_cover = normalize_cover(cover)
+    if clean_cover:
+        body["picUrl"] = clean_cover
+    url = _api_url(base, MINIAPP_ARK_ACTION)
+    try:
+        data = await _post(url, body, access_token or "", timeout, use_header=True)
+    except Exception as exc:  # noqa: BLE001 - 拿不到就走本地 payload
+        logger.info("生成小程序卡片失败（%s）：%s", url, error_text(exc))
+        return {}
+    if not response_ok(data):
+        logger.info("生成小程序卡片被拒绝（%s）：%s", url, response_detail(data))
+        return {}
+    inner = data.get("data")
+    card = inner.get("data") if isinstance(inner, dict) else None
+    if not isinstance(card, dict) or not card.get("app") or not card.get("view"):
+        logger.info("生成小程序卡片的返回不像卡片：%s", str(inner)[:200])
+        return {}
+    logger.info("已用 SnowLuma 官方通道生成卡片：%s", clean_title)
+    return card
+
+
+async def check_card_message(
+    api_base: str,
+    access_token: str = "",
+    message_id: str = "",
+    timeout: float = 5.0,
+) -> Optional[bool]:
+    """发出后回查这条消息：True=还是卡片，False=被降级成文本，None=查不到。"""
+
+    base = (api_base or "").strip()
+    mid = str(message_id or "").strip()
+    if not base or not mid:
+        return None
+    url = _api_url(base, "get_msg")
+    try:
+        data = await _post(
+            url, {"message_id": _coerce_id(mid)}, access_token or "", timeout, use_header=True
+        )
+    except Exception as exc:  # noqa: BLE001 - 回查失败不影响主流程
+        logger.debug("回查消息失败（%s）：%s", url, error_text(exc))
+        return None
+    if not response_ok(data):
+        return None
+    inner = data.get("data")
+    if not isinstance(inner, dict):
+        return None
+    return not looks_degraded(inner)
+
+
+async def recall_message(
+    api_base: str,
+    access_token: str = "",
+    message_id: str = "",
+    timeout: float = 5.0,
+) -> bool:
+    """撤回一条消息（被降级的卡片要清掉，免得群里留条乱码）。"""
+
+    base = (api_base or "").strip()
+    mid = str(message_id or "").strip()
+    if not base or not mid:
+        return False
+    url = _api_url(base, "delete_msg")
+    try:
+        data = await _post(
+            url, {"message_id": _coerce_id(mid)}, access_token or "", timeout, use_header=True
+        )
+    except Exception as exc:  # noqa: BLE001 - 撤回失败只记日志
+        logger.info("撤回被降级的卡片失败（%s）：%s", url, error_text(exc))
+        return False
+    ok = response_ok(data)
+    logger.info("撤回被降级的卡片：%s", "成功" if ok else response_detail(data))
+    return ok

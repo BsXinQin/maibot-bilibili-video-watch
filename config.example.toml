@@ -10,7 +10,7 @@
 # 启用插件 —— 是否启用沁の刷B站视频
 enabled = true
 # 配置版本
-config_version = "1.5.1"
+config_version = "1.5.2"
 
 [schedule]
 # 刷取间隔（分钟） —— 每隔多少分钟自动刷一次 B 站：1=每分钟，60=每小时，1440=每天（可调范围 1 分钟 ~ 24 小时）
@@ -247,10 +247,14 @@ include_stats_line = false
 api_base = ""
 # 访问令牌 —— 上面那个接口的 Token，没设置就留空；SnowLuma 的 token 在它配置的 onebot_<uin>.json 里（accessToken）
 access_token = ""
-# 卡片类型 —— miniapp=小程序卡片（要封面图）；news=通用图文卡片
+# 卡片类型 —— miniapp=小程序卡片（和手机上转发的一样）；news=通用图文卡片
 card_kind = "miniapp"
+# 优先用官方通道生成卡片 —— miniapp 时先让 QQ 客户端自己生成卡片（SnowLuma 的 get_mini_app_ark，官方通道，手机上能正常显示）；NapCat 没有这个动作会自动退回插件本地拼的卡片
+use_official_ark = true
 # 失败退回图文 —— 卡片发不出去时，是否改发「封面图 + 文字」
 fallback_to_image = true
+# 回查并在被降级时改发图文 —— 发完用 get_msg 看这条消息，被 QQ 换成「发送者版本过低」就撤回，再改发封面图 + 文字
+verify_send = true
 # 超时（秒） —— 请求 OneBot 接口的超时秒数
 timeout_seconds = 8.0
 

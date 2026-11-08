@@ -354,6 +354,126 @@ class ShareCardTests(unittest.TestCase):
         self.assertTrue(detail.startswith("请求失败："), detail)
         self.assertEqual(len(calls), 2)
 
+    def test_fetch_mini_app_ark(self):
+        calls = []
+        card = {"ver": "1", "app": "com.tencent.miniapp_01", "view": "viewMultiMsg"}
+
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            calls.append((url, body, token))
+            return {"status": "ok", "retcode": 0, "data": {"data": card}}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        got = asyncio.run(
+            self.card.fetch_mini_app_ark(
+                "http://172.23.0.2:3000",
+                "tok",
+                title="标题",
+                jump_url="https://www.bilibili.com/video/BV1TEST",
+                cover="//i0.hdslb.com/c.jpg",
+                desc="测试UP",
+                timeout=1.0,
+            )
+        )
+
+        self.assertEqual(got, card)
+        self.assertEqual(calls[0][0], "http://172.23.0.2:3000/get_mini_app_ark")
+        self.assertEqual(calls[0][1]["type"], "bili")
+        self.assertEqual(calls[0][2], "tok")
+        self.assertEqual(calls[0][1]["picUrl"], "https://i0.hdslb.com/c.jpg")
+        self.assertEqual(calls[0][1]["jumpUrl"], "https://www.bilibili.com/video/BV1TEST")
+
+    def test_fetch_mini_app_ark_rejects_broken_reply(self):
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            return {"status": "ok", "retcode": 0, "data": {"data": {"ver": "1"}}}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        got = asyncio.run(
+            self.card.fetch_mini_app_ark(
+                "http://127.0.0.1:3000",
+                "",
+                title="标题",
+                jump_url="https://www.bilibili.com/video/BV1TEST",
+                timeout=1.0,
+            )
+        )
+        self.assertEqual(got, {})
+
+    def test_fetch_mini_app_ark_needs_url(self):
+        got = asyncio.run(
+            self.card.fetch_mini_app_ark("", "", title="标题", jump_url="u")
+        )
+        self.assertEqual(got, {})
+
+    def test_looks_degraded(self):
+        self.assertTrue(
+            self.card.looks_degraded(
+                {"message": [{"type": "text", "data": {"text": "发送者版本过低，无法展示内容"}}]}
+            )
+        )
+        self.assertTrue(self.card.looks_degraded({"raw_message": "[unsupported:json]"}))
+        self.assertFalse(
+            self.card.looks_degraded(
+                {"message": [{"type": "json", "data": {"data": "{}"}}]}
+            )
+        )
+        self.assertFalse(self.card.looks_degraded({}))
+        self.assertFalse(self.card.looks_degraded("plain"))
+
+    def test_check_card_message(self):
+        replies = {
+            "1": {"status": "ok", "retcode": 0, "data": {"message_id": 1, "raw_message": "[CQ:json]"}},
+            "2": {
+                "status": "ok",
+                "retcode": 0,
+                "data": {"message_id": 2, "raw_message": "发送者版本过低，无法展示内容"},
+            },
+        }
+
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            self.assertTrue(url.endswith("/get_msg"))
+            return replies.get(str(body.get("message_id")), {"status": "failed", "retcode": 100})
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        self.assertIs(
+            asyncio.run(self.card.check_card_message("http://127.0.0.1:3000", "", "1")), True
+        )
+        self.assertIs(
+            asyncio.run(self.card.check_card_message("http://127.0.0.1:3000", "", "2")), False
+        )
+        self.assertIsNone(asyncio.run(self.card.check_card_message("http://127.0.0.1:3000", "", "")))
+
+    def test_recall_message(self):
+        calls = []
+
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            calls.append((url, body))
+            return {"status": "ok", "retcode": 0, "data": None}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        self.assertTrue(
+            asyncio.run(self.card.recall_message("http://127.0.0.1:3000", "", "259010366"))
+        )
+        self.assertTrue(calls[0][0].endswith("/delete_msg"))
+        self.assertEqual(calls[0][1]["message_id"], 259010366)
+        self.assertFalse(asyncio.run(self.card.recall_message("", "", "1")))
+
+    def test_message_id(self):
+        self.assertEqual(self.card._message_id({"data": {"message_id": 12}}), "12")
+        self.assertEqual(self.card._message_id({"data": {}}), "")
+        self.assertEqual(self.card._message_id("nope"), "")
+
 
 class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
     """_send_parts 按 share.style 分派，并逐级回退。"""
@@ -418,6 +538,39 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ctx.send.images, [])
         self.assertIn("【原神新版本测评】", self.ctx.send.messages[0]["text"])
 
+    def _stub_card(self, *, ok=True, detail="ok", message_id="", ark=None, verdict=None):
+        """把卡片相关的网络调用全换成桩，别让测试真去连 QQ 客户端。"""
+
+        module = self.module
+        calls = {"send": [], "ark": [], "check": [], "recall": []}
+
+        async def fake_ark(api_base, token="", **kwargs):
+            calls["ark"].append({"api_base": api_base, "token": token, **kwargs})
+            return dict(ark or {})
+
+        async def fake_send(api_base, token="", **kwargs):
+            calls["send"].append({"api_base": api_base, "token": token, **kwargs})
+            return ok, detail, message_id
+
+        async def fake_check(api_base, token="", mid="", timeout=5.0):
+            calls["check"].append(mid)
+            return verdict
+
+        async def fake_recall(api_base, token="", mid="", timeout=5.0):
+            calls["recall"].append(mid)
+            return True
+
+        for name, value in (
+            ("fetch_mini_app_ark", fake_ark),
+            ("send_json_card_ex", fake_send),
+            ("check_card_message", fake_check),
+            ("recall_message", fake_recall),
+        ):
+            original = getattr(module, name)
+            setattr(module, name, value)
+            self.addCleanup(lambda n=name, o=original: setattr(module, n, o))
+        return calls
+
     async def test_card_style_uses_onebot_route(self):
         plugin = self._plugin(
             share={"style": "card"},
@@ -425,32 +578,127 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         )
         plugin._register_stream_route("stream-1", group_id="123456")
         video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
-        calls = []
-
-        async def fake_send_card(api_base, token="", **kwargs):
-            calls.append({"api_base": api_base, "token": token, **kwargs})
-            return True, "ok"
-
-        original = self.module.send_json_card
-        self.module.send_json_card = fake_send_card
-        self.addCleanup(lambda: setattr(self.module, "send_json_card", original))
+        calls = self._stub_card()
 
         ok = await plugin._send_parts("stream-1", video, "快看这个")
         self.assertTrue(ok)
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["api_base"], "http://172.23.0.2:3000")
-        self.assertEqual(calls[0]["token"], "tok")
-        self.assertEqual(calls[0]["group_id"], "123456")
-        self.assertEqual(calls[0]["payload"]["app"], "com.tencent.miniapp_01")
+        self.assertEqual(len(calls["send"]), 1)
+        sent = calls["send"][0]
+        self.assertEqual(sent["api_base"], "http://172.23.0.2:3000")
+        self.assertEqual(sent["token"], "tok")
+        self.assertEqual(sent["group_id"], "123456")
+        self.assertEqual(sent["payload"]["app"], "com.tencent.miniapp_01")
         # 卡片前面那句随口话照发
         self.assertEqual(len(self.ctx.send.messages), 1)
         self.assertIn("快看这个", self.ctx.send.messages[0]["text"])
+
+    async def test_card_style_prefers_official_ark(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000", "access_token": "tok"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        ark = {"app": "com.tencent.miniapp_01", "view": "viewMultiMsg", "meta": {"detail_1": {}}}
+        calls = self._stub_card(ark=ark)
+
+        ok = await plugin._send_parts("stream-1", video, "快看这个")
+        self.assertTrue(ok)
+        self.assertEqual(len(calls["ark"]), 1)
+        self.assertEqual(calls["ark"][0]["title"], video.title)
+        self.assertEqual(calls["ark"][0]["jump_url"], video.url)
+        self.assertEqual(calls["ark"][0]["cover"], video.cover)
+        # 发出去的是官方通道生成的那张卡，不是本地拼的
+        self.assertEqual(calls["send"][0]["payload"], ark)
+
+    async def test_card_style_falls_back_to_local_payload(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        calls = self._stub_card(ark=None)
+
+        ok = await plugin._send_parts("stream-1", video, "快看这个")
+        self.assertTrue(ok)
+        self.assertEqual(len(calls["ark"]), 1)
+        payload = calls["send"][0]["payload"]
+        self.assertEqual(payload["app"], "com.tencent.miniapp_01")
+        self.assertEqual(payload["view"], "viewMultiMsg")
+        self.assertEqual(
+            payload["meta"]["detail_1"]["preview"], "https://i0.hdslb.com/c.jpg"
+        )
+
+    async def test_card_style_can_send_ark_without_cover(self):
+        # 本地拼卡片必须有封面，但官方通道只要标题 + 链接就能出卡
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module)  # 没有封面
+        ark = {"app": "com.tencent.miniapp_01", "view": "viewMultiMsg"}
+        calls = self._stub_card(ark=ark)
+
+        ok = await plugin._send_parts("stream-1", video, "看看")
+        self.assertTrue(ok)
+        self.assertEqual(len(calls["send"]), 1)
+        self.assertEqual(calls["send"][0]["payload"], ark)
+
+    async def test_news_kind_ignores_official_ark(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000", "card_kind": "news"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        calls = self._stub_card()
+
+        ok = await plugin._send_parts("stream-1", video, "看看")
+        self.assertTrue(ok)
+        self.assertEqual(calls["ark"], [])
+        self.assertEqual(calls["send"][0]["payload"]["view"], "news")
+
+    async def test_degraded_card_is_recalled_and_falls_back(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        self._cover(plugin)
+        calls = self._stub_card(message_id="259010366", verdict=False)
+
+        ok = await plugin._send_parts("stream-1", video, "看看")
+        self.assertTrue(ok)
+        self.assertEqual(calls["check"], ["259010366"])
+        self.assertEqual(calls["recall"], ["259010366"])
+        # 撤回后自动改发封面图 + 文字
+        self.assertEqual(len(self.ctx.send.images), 1)
+        self.assertIn("【原神新版本测评】", self.ctx.send.messages[-1]["text"])
+
+    async def test_degraded_card_check_can_be_disabled(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000", "verify_send": False},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        self._cover(plugin)
+        calls = self._stub_card(message_id="259010366", verdict=False)
+
+        ok = await plugin._send_parts("stream-1", video, "看看")
+        self.assertTrue(ok)
+        self.assertEqual(calls["check"], [])
+        self.assertEqual(self.ctx.send.images, [])
 
     async def test_card_style_without_api_falls_back_to_image(self):
         plugin = self._plugin(share={"style": "card"})  # 没配卡片直发地址
         plugin._register_stream_route("stream-1", user_id="3482063535")
         video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
         self._cover(plugin)
+        self._stub_card()
         ok = await plugin._send_parts("stream-1", video, "看看")
         self.assertTrue(ok)
         self.assertEqual(len(self.ctx.send.images), 1)
@@ -463,6 +711,7 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         )
         video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
         self._cover(plugin, None)
+        self._stub_card()
         ok = await plugin._send_parts("stream-1", video, "看看")
         self.assertTrue(ok)
         self.assertEqual(self.ctx.send.images, [])
@@ -475,13 +724,7 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         )
         plugin._register_stream_route("stream-1", group_id="123456")
         video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
-
-        async def fake_send_card(api_base, token="", **kwargs):
-            return True, "ok"
-
-        original = self.module.send_json_card
-        self.module.send_json_card = fake_send_card
-        self.addCleanup(lambda: setattr(self.module, "send_json_card", original))
+        self._stub_card()
 
         ok = await plugin._send_parts("stream-1", video, "快看这个")
         self.assertTrue(ok)

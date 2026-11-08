@@ -5,6 +5,23 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.5.2] - 2026-11-08
+
+小程序卡片改用 QQ 客户端自己生成（SnowLuma 的 `get_mini_app_ark`），并且发完回查、被降级就撤回改发图文。
+
+### 新增
+
+- **优先用官方通道生成卡片**：`card_kind = "miniapp"` 时先调 SnowLuma 的 `POST /get_mini_app_ark`（`type=bili`，参数 `title` / `desc` / `picUrl` / `jumpUrl`），它内部走 `LightAppSvc.mini_app_share.AdaptShareInfo` 拿到官方给的卡片对象，再把这份 `data` 原样放进 OneBot `json` 段发出去——卡片结构由客户端自己拼，不再靠本地猜字段。NapCat 没有这个动作，请求失败会自动退回原来的本地 payload。
+- **发完回查**：新增 `[card].verify_send`（默认开）。发出去后调 `POST /get_msg` 看这条消息还在不在卡片形态：出现「发送者版本过低，无法展示内容」这类兜底文案就判定被 QQ 降级，先 `POST /delete_msg` 撤回，再按 `fallback_to_image` 改发封面图 + 文字，群里不会留一条看不懂的乱码。
+- **本地卡片不再强制要封面**：官方通道只给标题 + 链接也能出卡，所以没有封面的视频现在也能发 miniapp 卡片（原来会直接掉到图文）。
+- `share_card` 新增 `send_json_card_ex`（多回传 `message_id`）、`fetch_mini_app_ark`、`check_card_message`、`recall_message`、`looks_degraded`、`_message_id`、`_flatten_text`；`send_json_card` 保留原签名，内部走 `send_json_card_ex`。
+
+### 变更
+
+- 新增配置 `[card].use_official_ark`（默认 `true`，关掉就只用本地拼的卡片）与 `[card].verify_send`（默认 `true`）。
+- `_manifest.json` 的 `version` 与 `config.py` 的 `config_version` 升到 `1.5.2`。
+- 测试：`tests/test_share_style.py` 新增 13 个用例（`fetch_mini_app_ark` 三种返回、`looks_degraded`、`check_card_message`、`recall_message`、`_message_id`，以及优先用官方卡片 / 官方失败退回本地 / 无封面走官方 / `news` 不走官方 / 被降级撤回改图文 / 关掉回查），并把卡片分派的旧用例改成桩掉 `fetch_mini_app_ark` / `send_json_card_ex`，不再依赖真实网络。
+
 ## [1.5.1] - 2026-11-08
 
 卡片直发兼容 SnowLuma（它只实现通用 `send_msg`）。

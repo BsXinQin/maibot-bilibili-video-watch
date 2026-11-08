@@ -43,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.5.1",
+        default="1.5.2",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -709,10 +709,24 @@ class CardConfig(PluginConfigBase):
         ),
         json_schema_extra={"label": "卡片样式（miniapp / news）", "placeholder": "miniapp"},
     )
+    use_official_ark: bool = Field(
+        default=True,
+        description=(
+            "miniapp 样式是否先用 QQ 客户端自己生成卡片（SnowLuma 的 get_mini_app_ark，用官方通道，手机上能正常显示；NapCat 没这个动作会自动退回本地拼的卡片）"
+        ),
+        json_schema_extra={"label": "优先用官方通道生成卡片"},
+    )
     fallback_to_image: bool = Field(
         default=True,
         description="卡片发不出去时，是否自动退成「封面图 + 文字」再发一次",
         json_schema_extra={"label": "失败退回图文"},
+    )
+    verify_send: bool = Field(
+        default=True,
+        description=(
+            "发完回查这条消息：如果被 QQ 降级成「发送者版本过低，无法展示内容」，就撤回它并改发封面图 + 文字（需要 QQ 客户端支持 get_msg / delete_msg）"
+        ),
+        json_schema_extra={"label": "回查并在被降级时改发图文"},
     )
     timeout_seconds: float = Field(
         default=8.0,
