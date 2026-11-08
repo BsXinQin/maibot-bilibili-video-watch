@@ -10,7 +10,7 @@
 # 启用插件 —— 是否启用沁の刷B站视频
 enabled = true
 # 配置版本
-config_version = "1.6.5"
+config_version = "1.6.6"
 
 [schedule]
 # 刷取间隔（分钟） —— 每隔多少分钟自动刷一次 B 站：1=每分钟，60=每小时，1440=每天（可调范围 1 分钟 ~ 24 小时）
@@ -239,6 +239,8 @@ style = "text"
 card_caption = true
 # 随口一句字数上限 —— 分享时那句随口话的最大字数（超长会截断）
 casual_max_chars = 60
+# 每次分享带那句随口话的概率（%）：100 每次都带，0 从不带，60 就是六成次数带
+casual_chance = 100
 # 附带视频信息 —— 是否在标题链接后面附带播放量 / 点赞 / UP 主信息
 include_stats_line = false
 # 分享链接的 vd_source —— B 站「复制链接」里的设备标识，填上就和网页复制出来的一模一样；留空只带 share_source=copy_web

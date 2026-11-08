@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.6.5-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.6.6-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v1.6.5** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
+> 当前版本 **v1.6.6** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -171,7 +171,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.6.5"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.6.6"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -354,6 +354,7 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 | `style` | `"text"` | 分享形式：`text` 一条文字、`image` 封面图 + 文字、`card` QQ 小程序卡片 |
 | `card_caption` | `true` | `style = "card"` 时，卡片前面要不要先发那句随口话 |
 | `casual_max_chars` | `60` | 那句随口话的字数上限（`20`~`160`） |
+| `casual_chance` | `100` | 每次分享带随口话的概率（`0`~`100`，单位 %）：`100` 每次都带，`0` 从不带，`60` 就是六成次数带 |
 | `include_stats_line` | `false` | 链接后面是否附一行播放量 / 点赞 / UP 主 |
 | `vd_source` | `""` | 分享链接里的 `vd_source` 参数，填上 B 站「复制链接」里那串设备标识就和网页复制出来的完全一致；留空只带 `share_source=copy_web` |
 | `single_message` | `true` | 封面图和【标题】链接合成一条消息发（`send.hybrid`）；关掉就是先图后字两条，宿主不支持时也会自动退回两条 |
@@ -710,6 +711,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v1.6.6**：随口一句改成按概率触发（`[share].casual_chance`，0~100 %），没抽中的那几次只发标题链接
 - **v1.6.5**：图文分享改成「先发封面 + 链接（合成一条），再把随口一句单独发一条」—— 随口一句不再掺进链接那条；卡片回退时不会重复发前言
 - **v1.6.4**：封面图和链接合成同一条消息发出（`[share].single_message`，走宿主 `send.hybrid`；不支持就自动退回先图后字）
 - **v1.6.3**：分享改成 B 站官方「复制链接」格式 —— `【标题】 https://www.bilibili.com/video/BVxxx/?share_source=copy_web&vd_source=...`，新增 `[share].vd_source`

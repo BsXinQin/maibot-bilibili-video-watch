@@ -5,6 +5,16 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.6.6] - 2026-11-08
+
+### 新增
+
+- `[share].casual_chance`（0~100，单位 %）：每次分享带那句随口话的概率。`100` 每次都带（默认，行为和以前一样），`0` 从不带，`60` 约六成次数带。
+- 掷骰子在上层 `_send_parts()` 里做一次，text / image / card 三种形式共用同一个结果：没抽中时卡片前言也不发。
+
+### 变更
+
+- 随手一句的抽取只影响这一条分享的文案，不影响链接、封面图、统计行。
 ## [1.6.5] - 2026-11-08
 
 ### 变更

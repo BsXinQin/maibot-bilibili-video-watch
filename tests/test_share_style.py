@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -1482,6 +1483,52 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertEqual(len(calls["send"]), 1)
 
+
+    # --- 随口一句的概率触发 ---
+
+    def test_roll_casual_boundaries(self):
+        plugin = self._plugin(share={"casual_chance": 0})
+        self.assertFalse(plugin._roll_casual())
+        plugin = self._plugin(share={"casual_chance": 100})
+        self.assertTrue(plugin._roll_casual())
+
+    def test_roll_casual_uses_random(self):
+        plugin = self._plugin(share={"casual_chance": 50})
+        with patch.object(self.module.random, "random", return_value=0.2):
+            self.assertTrue(plugin._roll_casual())
+        with patch.object(self.module.random, "random", return_value=0.8):
+            self.assertFalse(plugin._roll_casual())
+
+    async def test_casual_chance_zero_skips_narrative(self):
+        plugin = self._plugin(share={"style": "image", "casual_chance": 0})
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        self._cover(plugin)
+        ok = await plugin._send_parts("stream-1", video, "看看这个")
+        self.assertTrue(ok)
+        self.assertEqual(len(self.ctx.send.hybrids), 1)
+        # 只发封面 + 链接，那句随口话一次都不发
+        self.assertEqual(self.ctx.send.messages, [])
+
+    async def test_casual_chance_zero_text_style(self):
+        plugin = self._plugin(share={"casual_chance": 0})
+        video = make_video(self.video_module)
+        await plugin._send_parts("stream-1", video, "这也太好玩了")
+        self.assertEqual(len(self.ctx.send.messages), 1)
+        text = self.ctx.send.messages[0]["text"]
+        self.assertIn("【原神新版本测评】", text)
+        self.assertNotIn("这也太好玩了", text)
+
+    async def test_casual_chance_partial_keeps_or_drops(self):
+        video = make_video(self.video_module)
+        plugin = self._plugin(share={"casual_chance": 50})
+        with patch.object(self.module.random, "random", return_value=0.2):
+            await plugin._send_parts("stream-1", video, "看看这个")
+        self.assertIn("看看这个", self.ctx.send.messages[0]["text"])
+        self.ctx.send.messages.clear()
+        plugin = self._plugin(share={"casual_chance": 50})
+        with patch.object(self.module.random, "random", return_value=0.9):
+            await plugin._send_parts("stream-1", video, "看看这个")
+        self.assertNotIn("看看这个", self.ctx.send.messages[0]["text"])
 
 class ShareLinkTests(unittest.TestCase):
     """分享链接用 B 站官方「复制链接」格式。"""

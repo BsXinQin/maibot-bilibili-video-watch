@@ -43,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.6.5",
+        default="1.6.6",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -667,6 +667,16 @@ class ShareConfig(PluginConfigBase):
         le=160,
         description="分享时那句随口话的最大字数（超长会截断）",
         json_schema_extra={"label": "随口一句字数上限"},
+    )
+    casual_chance: float = Field(
+        default=100.0,
+        ge=0.0,
+        le=100.0,
+        description=(
+            "每次分享有多大概率带上那句随口话（0=从不带，100=每次都带）；"
+            "掷骰子在插件的发送流程里做，概率低的那些次就只发标题链接"
+        ),
+        json_schema_extra={"label": "随口一句触发概率（%）", "placeholder": "60"},
     )
     single_message: bool = Field(
         default=True,

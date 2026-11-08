@@ -1807,6 +1807,16 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
 
         style = str(getattr(self.config.share, "style", "text") or "text").strip().lower()
         return style if style in ("text", "image", "card") else "text"
+    def _roll_casual(self) -> bool:
+        """这次分享要不要带那句随口话：按 [share].casual_chance 掷一次骰子。"""
+
+        share = getattr(self.config, "share", None)
+        chance = float(getattr(share, "casual_chance", 100.0) or 0.0)
+        if chance >= 100.0:
+            return True
+        if chance <= 0.0:
+            return False
+        return random.random() * 100.0 < chance
 
     async def _send_with_fallback(self, stream_id: str, sender) -> bool:
         """用某个发送函数向会话发内容；失败时换同群 / 同用户的其他候选会话。
@@ -2204,6 +2214,9 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
 
         config = self.config
         line = "" if kind == "shiwei" else (narrative or "").strip()
+        if line and not self._roll_casual():
+            logger.info("随口一句按概率跳过（[share].casual_chance），这次只发标题链接：%s", video.bvid)
+            line = ""
         header = format_share_header(video, getattr(config.share, "vd_source", ""))
         stats = ""
         if config.share.include_stats_line:
