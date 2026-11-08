@@ -5,6 +5,16 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.6.5] - 2026-11-08
+
+### 变更
+
+- 图文分享（`[share].style = "image"`）改成两条：
+  1. 封面图 + `【标题】 官方链接` 合成**一条**（`send.hybrid`，宿主不支持时退回先图后字）；
+  2. 随口一句（LLM 写的分享文案）**单独一条**发在后面。
+- 随口一句不再拼进链接那条，所以链路文案里不会出现「一句话 + 一长串链接」挤在同一条。
+- 卡片（card）失败退回图文时，若随口一句已经当「卡片前言」发过，不再重复发第二遍（新增 `_card_caption_sent` 记录）。
+- `[share].single_message = false` 时仍是老行为：封面图一条、链接一条、随口一句一条，顺序同上。
 ## [1.6.4] - 2026-11-08
 
 ### 新增

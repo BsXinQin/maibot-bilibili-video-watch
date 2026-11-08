@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.6.4-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.6.5-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v1.6.4** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
+> 当前版本 **v1.6.5** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -171,7 +171,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.6.4"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.6.5"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -710,6 +710,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v1.6.5**：图文分享改成「先发封面 + 链接（合成一条），再把随口一句单独发一条」—— 随口一句不再掺进链接那条；卡片回退时不会重复发前言
 - **v1.6.4**：封面图和链接合成同一条消息发出（`[share].single_message`，走宿主 `send.hybrid`；不支持就自动退回先图后字）
 - **v1.6.3**：分享改成 B 站官方「复制链接」格式 —— `【标题】 https://www.bilibili.com/video/BVxxx/?share_source=copy_web&vd_source=...`，新增 `[share].vd_source`
 - **v1.6.2**：**卡片在你这种号上大概率发不出来**——实测 QQ 会把协议端发的 ark 统一降级成「发送者版本过低，无法展示内容」；新增 `[card].card_auto_disable`，第一次被降级后记住结果，之后的分享直接走封面图 + 文字，不再每次都留一条兜底文本（想再试就删 `card_state.json`）

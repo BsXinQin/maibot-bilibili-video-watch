@@ -1980,6 +1980,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
     async def _send_card(self, stream_id: str, video: Video, *, caption: str = "") -> bool:
         """把分享发成 QQ 卡片（小程序卡片 / 原生图文 Ark），直连 QQ 客户端的 OneBot HTTP。"""
 
+        self._card_caption_sent = False
         card_cfg = getattr(self.config, "card", None)
         api_base = str(getattr(card_cfg, "api_base", "") or "").strip()
         if not api_base:
@@ -2059,6 +2060,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 alt_payloads = variants[1:]
         if caption:
             await self._send_text(stream_id, caption)
+            self._card_caption_sent = True
         ok, detail, message_id = await send_json_card_ex(
             api_base,
             token,
@@ -2158,29 +2160,35 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         header: str,
         stats: str = "",
     ) -> bool:
-        """封面图 + 一句文字（图文分享）。"""
+        """封面图 + 链接一条，随口一句再单独一条。"""
 
-        caption = f"{line} {header}" if line else header
+        link_text = header
         if stats:
-            caption = caption + "\n" + stats
+            link_text = link_text + "\n" + stats
         data = await self._download_cover(video.cover)
         single = bool(getattr(self.config.share, "single_message", True))
+        sent = False
         if data and single:
             encoded = base64.b64encode(data).decode("ascii")
             segments = [
                 {"type": "image", "content": encoded},
-                {"type": "text", "content": caption},
+                {"type": "text", "content": link_text},
             ]
             if await self._send_hybrid(stream_id, segments):
-                return True
-            logger.info("图文合成一条失败（%s），退回封面图和文字分开发", stream_id)
-        sent_image = False
-        if data:
-            sent_image = await self._send_image(stream_id, data)
-        if await self._send_text(stream_id, caption):
-            return True
-        return sent_image
-
+                sent = True
+            else:
+                logger.info("图文合成一条失败（%s），退回封面图和链接分开发", stream_id)
+        if not sent:
+            if data:
+                sent = await self._send_image(stream_id, data)
+            if await self._send_text(stream_id, link_text):
+                sent = True
+        line = (line or "").strip()
+        if line:
+            # 随口一句单独发在封面 + 链接之后
+            if await self._send_text(stream_id, line):
+                sent = True
+        return sent
     async def _send_parts(
         self,
         stream_id: str,
@@ -2211,7 +2219,9 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             if await self._send_card(stream_id, video, caption=card_caption):
                 return True
             if getattr(config.card, "fallback_to_image", True):
-                if await self._send_image_parts(stream_id, video, line, header, stats):
+                # 随口一句已经当卡片前言发过了，回退时别再发一遍
+                rest = "" if getattr(self, "_card_caption_sent", False) else line
+                if await self._send_image_parts(stream_id, video, rest, header, stats):
                     return True
             return await self._send_text(stream_id, message)
         if style == "image":

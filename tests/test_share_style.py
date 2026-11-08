@@ -999,13 +999,15 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         # 封面图和文字合成一条发出去，不再是两条独立消息
         self.assertEqual(len(self.ctx.send.hybrids), 1)
         self.assertEqual(self.ctx.send.images, [])
-        self.assertEqual(self.ctx.send.messages, [])
         segments = self.ctx.send.hybrids[0]["segments"]
         self.assertEqual([item["type"] for item in segments], ["image", "text"])
         self.assertEqual(base64.b64decode(segments[0]["content"]), b"cover-bytes")
-        self.assertIn("看看这个", segments[1]["content"])
+        # 第一条只有标题链接，随口一句不掺进去
         self.assertIn("【原神新版本测评】", segments[1]["content"])
         self.assertIn("share_source=copy_web", segments[1]["content"])
+        self.assertNotIn("看看这个", segments[1]["content"])
+        # 随口一句单独一条，排在封面 + 链接之后
+        self.assertEqual([item["text"] for item in self.ctx.send.messages], ["看看这个"])
 
     async def test_image_style_can_still_send_two_messages(self):
         plugin = self._plugin(share={"style": "image", "single_message": False})
@@ -1297,9 +1299,10 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertEqual(calls["check"], ["259010366"])
         self.assertEqual(calls["recall"], ["259010366"])
-        # 撤回后自动改发封面图 + 文字
+        # 撤回后自动改发封面图 + 链接（随口一句已经当卡片前言发过，不重复）
         self.assertEqual(len(self.ctx.send.images), 1)
         self.assertIn("【原神新版本测评】", self.ctx.send.messages[-1]["text"])
+        self.assertEqual([item["text"] for item in self.ctx.send.messages].count("看看"), 1)
 
     async def test_degraded_card_check_can_be_disabled(self):
         plugin = self._plugin(
@@ -1326,7 +1329,8 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         ok = await plugin._send_parts("stream-1", video, "看看")
         self.assertTrue(ok)
         self.assertEqual(len(self.ctx.send.images), 1)
-        self.assertIn("看看", self.ctx.send.messages[0]["text"])
+        self.assertIn("【原神新版本测评】", self.ctx.send.messages[0]["text"])
+        self.assertEqual(self.ctx.send.messages[-1]["text"], "看看")
 
     async def test_card_style_without_route_falls_back_to_text(self):
         plugin = self._plugin(
