@@ -640,8 +640,6 @@ DANMAKU_URL = "https://api.bilibili.com/x/v1/dm/list.so"
 REPLY_URL = "https://api.bilibili.com/x/v2/reply"
 PLAYER_URL = "https://api.bilibili.com/x/player/v2"
 PLAYURL_URL = "https://api.bilibili.com/x/player/playurl"
-# 官方 AI 视频总结（章节要点 + ASR 字幕），需要登录 Cookie 与 WBI 签名
-AI_CONCLUSION_URL = "https://api.bilibili.com/x/web-interface/view/conclusion/get"
 
 _DANMAKU_RE = re.compile(r'<d p="([^"]*)"[^>]*>(.*?)</d>', re.S)
 
@@ -909,31 +907,6 @@ class BilibiliDetailMixin:
                 break
         return segments
 
-    async def fetch_ai_conclusion(self, bvid: str, *, cid: int = 0, up_mid: int = 0) -> Dict[str, Any]:
-        """读取 B 站官方的 AI 视频总结（含章节要点与 ASR 字幕）。
-
-        这个接口必须带 WBI 签名：不带签名虽然 HTTP 200，但 code=-403
-        「访问权限不足」；没登录 Cookie 时同样拿不到。取不到就返回空字典，
-        调用方退回简历 / CC 字幕，不影响整条视频的读取。
-        """
-
-        bvid = (bvid or "").strip()
-        if not bvid:
-            return {}
-        params: Dict[str, Any] = {"bvid": bvid}
-        if cid:
-            params["cid"] = int(cid)
-        if up_mid:
-            params["up_mid"] = int(up_mid)
-        try:
-            payload = await self._signed_get_json(  # type: ignore[attr-defined]
-                AI_CONCLUSION_URL, params
-            )
-        except BilibiliError:
-            return {}
-        data = payload.get("data")
-        return data if isinstance(data, dict) else {}
-
     async def resolve_redirect(self, url: str) -> str:
         """跟随 302 短链（b23.tv / bili2233.cn），返回最终地址。
 
@@ -992,9 +965,8 @@ class BilibiliDetailMixin:
         comment_limit: int = 8,
         danmaku_limit: int = 30,
         subtitle_chars: int = 1200,
-        ai_summary: bool = False,
     ) -> Dict[str, Any]:
-        """读取一条视频的完整资料：详情 + 分P + 热评 + 弹幕 + 字幕（+ 官方 AI 总结）。
+        """读取一条视频的完整资料：详情 + 分P + 热评 + 弹幕 + 字幕。
 
         详情接口（view）失败会抛 :class:`BilibiliError`；热评 / 弹幕 / 字幕
         任意一项失败只返回空列表，不影响整条视频的读取。
@@ -1047,15 +1019,6 @@ class BilibiliDetailMixin:
                 subtitle = " ".join(text for _start, text in subtitle_segments)[
                     : int(subtitle_chars)
                 ]
-        ai_conclusion: Dict[str, Any] = {}
-        if ai_summary:
-            owner = data.get("owner") if isinstance(data.get("owner"), dict) else {}
-            try:
-                ai_conclusion = await self.fetch_ai_conclusion(
-                    resolved_bvid, cid=cid, up_mid=_as_int(owner.get("mid"))
-                )
-            except BilibiliError:
-                ai_conclusion = {}
         return {
             "view": data,
             "pages": pages,
@@ -1064,7 +1027,6 @@ class BilibiliDetailMixin:
             "danmaku": danmaku,
             "subtitle": subtitle,
             "subtitle_segments": subtitle_segments,
-            "ai_conclusion": ai_conclusion,
         }
 
     async def fetch_playurl(self, video: Any, *, cid: int = 0) -> str:

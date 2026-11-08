@@ -10,7 +10,7 @@
 # 启用插件 —— 是否启用沁の刷B站视频
 enabled = true
 # 配置版本
-config_version = "1.6.0"
+config_version = "1.6.1"
 
 [schedule]
 # 刷取间隔（分钟） —— 每隔多少分钟自动刷一次 B 站：1=每分钟，60=每小时，1440=每天（可调范围 1 分钟 ~ 24 小时）
@@ -303,8 +303,6 @@ comment_limit = 8
 danmaku_limit = 30
 # 读取字幕 —— 是否读取 CC 字幕（需要登录 Cookie 才有）
 use_subtitle = true
-# 读取官方 AI 总结 —— 是否读 B 站服务端预生成的 AI 总结 + 章节要点 + ASR 字幕（需要登录 Cookie，没有总结时自动退回字幕/简介）
-use_ai_summary = true
 # 内容长度上限 —— 交给模型的内容字符上限，太长按顺序截断
 max_chars = 3500
 # 缓存时间（秒） —— 同一个视频多少秒内复用缓存结果
