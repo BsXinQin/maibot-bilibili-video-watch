@@ -1374,3 +1374,58 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls["tuwen"]), 1)
         self.assertEqual(len(self.ctx.send.images), 1)
 
+
+    def test_card_state_roundtrip_and_kind_mismatch(self):
+        plugin = self._plugin()
+        self.assertEqual(plugin._read_card_state(), {})
+        plugin._write_card_state(kind="miniapp", works=False, detail="被降级")
+        state = plugin._read_card_state()
+        self.assertEqual(state["kind"], "miniapp")
+        self.assertIs(state["works"], False)
+        self.assertTrue(plugin._card_known_broken("miniapp"))
+        # 换一种样式就重新试，不被另一种样式的失败记录拖累
+        self.assertFalse(plugin._card_known_broken("news"))
+        plugin._write_card_state(kind="miniapp", works=True, detail="正常")
+        self.assertFalse(plugin._card_known_broken("miniapp"))
+
+    async def test_degraded_card_is_remembered_and_skipped(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000", "access_token": "tok"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        self._cover(plugin)
+        calls = self._stub_card(message_id="493383154", verdict=False)
+
+        ok = await plugin._send_parts("stream-1", video, "看看")
+        self.assertTrue(ok)
+        self.assertEqual(len(calls["send"]), 1)
+        # 被降级的那条会被撤回
+        self.assertEqual(calls["recall"], ["493383154"])
+        self.assertIs(plugin._read_card_state().get("works"), False)
+
+        # 第二次：知道卡片发不出，直接发图文，不再产生兜底文本
+        ok2 = await plugin._send_parts("stream-1", video, "再看")
+        self.assertTrue(ok2)
+        self.assertEqual(len(calls["send"]), 1)
+        self.assertEqual(len(self.ctx.send.images), 2)
+
+    async def test_card_auto_disable_can_be_turned_off(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={
+                "api_base": "http://172.23.0.2:3000",
+                "access_token": "tok",
+                "card_auto_disable": False,
+            },
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        plugin._write_card_state(kind="miniapp", works=False)
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        self._cover(plugin)
+        calls = self._stub_card()
+
+        ok = await plugin._send_parts("stream-1", video, "再看看")
+        self.assertTrue(ok)
+        self.assertEqual(len(calls["send"]), 1)

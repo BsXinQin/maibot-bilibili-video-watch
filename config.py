@@ -43,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.6.1",
+        default="1.6.2",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -748,6 +748,13 @@ class CardConfig(PluginConfigBase):
             "发完没拿到消息回执时（SnowLuma 的 delivery was not confirmed），先拉一次群历史看这条卡片到底落库没有：已经能看到就算发送成功、不再重发；看不到才换另一种卡片重试。避免卡片其实发成了却重复发两遍"
         ),
         json_schema_extra={"label": "没回执时回查群历史"},
+    )
+    card_auto_disable: bool = Field(
+        default=True,
+        description=(
+            "某种卡片样式被 QQ 降级过（群里显示成「发送者版本过低，无法展示内容」）之后，记住这个结果，以后的分享直接用封面图 + 文字，不再每次都发一份兜底文本。想再试一次卡片：把插件数据目录里的 card_state.json 删掉，或者临时关掉这个开关"
+        ),
+        json_schema_extra={"label": "卡片被降级过就记住、不再重试"},
     )
     timeout_seconds: float = Field(
         default=8.0,

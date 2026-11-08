@@ -1940,6 +1940,12 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             logger.info("拿不到会话 %s 的群号 / QQ 号，改发图文", stream_id)
             return False
         kind = str(getattr(card_cfg, "card_kind", "miniapp") or "miniapp").strip().lower()
+        if self._card_known_broken(kind):
+            logger.info(
+                "卡片样式 %s 上次被 QQ 降级成兜底文本，这次直接发图文（想再试一次就删掉 card_state.json）",
+                kind,
+            )
+            return False
         token = str(getattr(card_cfg, "access_token", "") or "")
         timeout = float(getattr(card_cfg, "timeout_seconds", 8.0) or 8.0)
         desc = video.owner or video.description
@@ -1961,7 +1967,9 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 logger.warning("图文 Ark 分享失败（%s）：%s", video.bvid, detail)
                 return False
             logger.info("已用图文 Ark 分享 %s：%s", video.bvid, detail)
-            return await self._verify_card(api_base, token, message_id, timeout, video.bvid)
+            return await self._verify_card(
+                api_base, token, message_id, timeout, video.bvid, kind
+            )
         # 先按手机里那张真卡片的结构本地拼一份（appID / view_<模板ID> / config 齐全），
         # 再用官方通道补空字段：结构永远是我们这份，官方只补 url、icon、token 之类。
         payload = build_card_payload(
@@ -2013,10 +2021,63 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             logger.warning("卡片分享失败（%s）：%s", video.bvid, detail)
             return False
         logger.info("已用卡片分享 %s：%s", video.bvid, detail)
-        return await self._verify_card(api_base, token, message_id, timeout, video.bvid)
+        return await self._verify_card(
+                api_base, token, message_id, timeout, video.bvid, kind
+            )
+
+    # --- 卡片可用性记忆：被 QQ 降级过的样式不再每条都试，免得群里多一份兜底文本 ---
+
+    def _card_state_path(self) -> Optional[Path]:
+        if self._data_dir is None:
+            return None
+        return self._data_dir / "card_state.json"
+
+    def _read_card_state(self) -> Dict[str, Any]:
+        path = self._card_state_path()
+        if path is None or not path.is_file():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _write_card_state(self, *, kind: str, works: bool, detail: str = "") -> None:
+        path = self._card_state_path()
+        if path is None:
+            return
+        payload = {
+            "kind": kind,
+            "works": bool(works),
+            "detail": str(detail)[:300],
+            "checked_at": int(time.time()),
+        }
+        try:
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except Exception as exc:
+            logger.debug("写卡片状态失败：%s", exc)
+
+    def _card_known_broken(self, kind: str) -> bool:
+        """这个卡片样式之前被 QQ 降级过吗？降级过就别再发（避免群里留下一份兜底文本）。"""
+
+        card_cfg = getattr(self.config, "card", None)
+        if not bool(getattr(card_cfg, "card_auto_disable", True)):
+            return False
+        state = self._read_card_state()
+        if not state:
+            return False
+        if str(state.get("kind", "")) != str(kind):
+            return False
+        return state.get("works") is False
 
     async def _verify_card(
-        self, api_base: str, token: str, message_id: str, timeout: float, bvid: str
+        self,
+        api_base: str,
+        token: str,
+        message_id: str,
+        timeout: float,
+        bvid: str,
+        kind: str = "miniapp",
     ) -> bool:
         """发出后回查：被 QQ 降级成兜底文本就撤回，返回 False 让调用方改发图文。"""
 
@@ -2031,7 +2092,10 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 "卡片被 QQ 降级成文本（%s，message_id=%s），撤回并改发图文", bvid, message_id
             )
             await recall_message(api_base, token, message_id, timeout=min(timeout, 5.0))
+            self._write_card_state(kind=kind, works=False, detail="被 QQ 降级成兜底文本")
             return False
+        if verdict is True:
+            self._write_card_state(kind=kind, works=True, detail="卡片正常落库")
         return True
 
     async def _send_image_parts(

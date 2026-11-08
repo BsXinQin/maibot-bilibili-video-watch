@@ -5,6 +5,18 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.6.2] - 2026-11-08
+
+### 新增
+
+- **记住「卡片发不出去」这件事**：`[card].card_auto_disable`（默认开）。某种卡片样式被 QQ 降级成兜底文本之后，把结果写进插件数据目录的 `card_state.json`，之后的分享直接改发「封面图 + 文字」，不再每次都先发一份「发送者版本过低，无法展示内容」。
+- 想再试一次卡片：删掉 `<插件数据目录>/card_state.json`，或临时把 `card_auto_disable` 关掉；换 `card_kind`（miniapp / tuwen / news）也会重新试，因为记录里带样式名。
+
+### 实测结论（写进文档，免得再白折腾）
+
+- QQ 对**协议端**发出的 ark（`json` 段）有客户端版本校验。用本机环境实测：`send_group_msg` 返回 `ok` + `message_id`，但服务端落库的内容被替换成 `发送者版本过低，无法展示内容`；`structmsg/news` 同样被降级；`send_tuwen_ark` 直接被 OIDB 拒绝（`error 901501 ... rule type not match appid`）。
+- 也就是说：手机上手动转发 B 站视频能出卡，是因为发送方是真正的 QQ 客户端；机器人通过协议端发同一份结构，腾讯在服务端就把 ark 换掉了。这与卡片结构是否正确无关（结构已按真卡片逐字段复刻并验证一致）。
+- 因此 `[share].style = "image"`（封面图 + 一句话）是这类号上唯一稳定的「带图分享」形态；`card` 保留给客户端版本被腾讯放行的部署。
 ## [1.6.1] - 2026-11-08
 
 ### 移除

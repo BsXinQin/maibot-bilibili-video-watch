@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-1.6.1-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.6.2-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v1.6.1** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
+> 当前版本 **v1.6.2** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文 / QQ 卡片（小程序卡片、原生图文 Ark、通用图文三种，被降级会自动撤回改图文）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -171,7 +171,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `"1.6.1"` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `"1.6.2"` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -378,6 +378,7 @@ min_play = 0                     # 该类别最低播放量，0 = 沿用 [filter
 | `fallback_to_image` | `true` | 卡片发不出去时，改发「封面图 + 文字」 |
 | `verify_send` | `true` | 发完回查这条消息：被 QQ 降级成「发送者版本过低，无法展示内容」就撤回，并改发封面图 + 文字 |
 | `verify_history` | `true` | 没拿到消息回执时先查群历史：卡片已在群里就算发送成功、不再重发；查不到才换另一种版本重试（避免同一张卡发两遍） |
+| `card_auto_disable` | `true` | 某种卡片样式被 QQ 降级过（群里显示「发送者版本过低，无法展示内容」）就记住，之后的分享直接用封面图 + 文字，不再每条都先发一份兜底文本。想再试一次就删掉插件数据目录里的 `card_state.json` |
 | `card_kind = "tuwen"` 额外说明 | — | 走 SnowLuma 的 `send_tuwen_ark`，参数是 `title` / `desc` / `summary` / `preview_url` / `jump_url`；NapCat 没这个动作，会自动退回图文 |
 | `timeout_seconds` | `8.0` | 请求 OneBot 接口的超时（`1`~`30` 秒） |
 
@@ -707,6 +708,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v1.6.2**：**卡片在你这种号上大概率发不出来**——实测 QQ 会把协议端发的 ark 统一降级成「发送者版本过低，无法展示内容」；新增 `[card].card_auto_disable`，第一次被降级后记住结果，之后的分享直接走封面图 + 文字，不再每次都留一条兜底文本（想再试就删 `card_state.json`）
 - **v1.6.1**：B 站下架了官方 AI 总结接口，移除 1.6.0 接入的「摘要 + 章节要点 + ASR 时间轴」与配置 `[read].use_ai_summary`，读视频回到 CC 字幕 + 热评 + 弹幕那一套（装过 1.6.0 的直接覆盖即可）
 - **v1.5.6**：没回执时先回查群历史（`get_group_msg_history`），卡片已经在群里就算成功、不再重发，避免 1.5.5 的换版重试把同一张卡发两遍；新增配置 `[card].verify_history`
 - **v1.5.5**：修「卡片发出去但 QQ 说没有回执」。SnowLuma 对群消息做严格回执校验，带 `bthirdappforward` 的卡片常常只拿到 `result=0` 而没有 `message_id`，于是报 `group message delivery was not confirmed: QQ returned no message receipt`，插件以为失败、又补一遍图文。现在 `build_miniapp_payload()` 支持 `forward` 开关、新增 `apply_forward_flags()` / `miniapp_variants()`：**默认先发不带转发标记的版本**，被回「没回执」时自动换另一种版本重发一次（风控之类的真失败不重发，避免重复）。新增配置 `[card].miniapp_forward`。（1.5.6 起换版前会先回查群历史，防止其实已发出却又发一遍）
