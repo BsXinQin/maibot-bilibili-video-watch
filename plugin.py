@@ -1905,6 +1905,29 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             return False
         return self._send_result_ok(result, stream_id, label="封面图")
 
+    async def _send_hybrid(self, stream_id: str, segments: list) -> bool:
+        """把多段内容（图 + 字）当成一条消息发出去。"""
+
+        if not segments or not stream_id:
+            return False
+        return await self._send_with_fallback(
+            stream_id, lambda sid: self._send_hybrid_once(sid, segments)
+        )
+
+    async def _send_hybrid_once(self, stream_id: str, segments: list) -> bool:
+        """向指定会话发送一条图文混合消息（宿主 send.hybrid）。"""
+
+        send = getattr(self.ctx, "send", None)
+        hybrid = getattr(send, "hybrid", None) if send is not None else None
+        if not callable(hybrid):
+            logger.debug("当前宿主不支持图文混合发送，退回分开发")
+            return False
+        try:
+            result = await hybrid(segments, stream_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("发送图文混合消息失败（%s）：%s", stream_id, exc)
+            return False
+        return self._send_result_ok(result, stream_id, label="图文消息")
     async def _download_cover(self, url: str) -> Optional[bytes]:
         """下载封面图；失败或太大就返回 None（退回纯文字）。"""
 
@@ -2140,8 +2163,18 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         caption = f"{line} {header}" if line else header
         if stats:
             caption = caption + "\n" + stats
-        sent_image = False
         data = await self._download_cover(video.cover)
+        single = bool(getattr(self.config.share, "single_message", True))
+        if data and single:
+            encoded = base64.b64encode(data).decode("ascii")
+            segments = [
+                {"type": "image", "content": encoded},
+                {"type": "text", "content": caption},
+            ]
+            if await self._send_hybrid(stream_id, segments):
+                return True
+            logger.info("图文合成一条失败（%s），退回封面图和文字分开发", stream_id)
+        sent_image = False
         if data:
             sent_image = await self._send_image(stream_id, data)
         if await self._send_text(stream_id, caption):

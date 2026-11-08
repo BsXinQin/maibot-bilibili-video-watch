@@ -90,6 +90,7 @@ class FakeSend:
     def __init__(self, fail_streams: Optional[Any] = None) -> None:
         self.messages: List[Dict[str, str]] = []
         self.images: List[Dict[str, str]] = []
+        self.hybrids: List[Dict[str, Any]] = []
         self.fail_streams = set(fail_streams or ())
         self.attempts: List[Dict[str, str]] = []
 
@@ -105,6 +106,12 @@ class FakeSend:
         if stream_id in self.fail_streams:
             return {"success": False, "error": "未命中任何发送路由"}
         self.images.append({"stream_id": stream_id, "data": image_base64})
+        return {"success": True}
+    async def hybrid(self, segments: list, stream_id: str, **kwargs: Any) -> bool:
+        self.attempts.append({"stream_id": stream_id, "hybrid": len(segments)})
+        if stream_id in self.fail_streams:
+            return {"success": False, "error": "未命中任何发送路由"}
+        self.hybrids.append({"stream_id": stream_id, "segments": segments})
         return {"success": True}
 
 

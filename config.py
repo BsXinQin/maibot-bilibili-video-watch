@@ -43,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.6.3",
+        default="1.6.4",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -667,6 +667,13 @@ class ShareConfig(PluginConfigBase):
         le=160,
         description="分享时那句随口话的最大字数（超长会截断）",
         json_schema_extra={"label": "随口一句字数上限"},
+    )
+    single_message: bool = Field(
+        default=True,
+        description=(
+            "封面图和【标题】链接合成一条消息发出（宿主 send.hybrid）；宿主不支持或发送失败时自动退回先图后字两条"
+        ),
+        json_schema_extra={"label": "封面图和链接合成一条消息"},
     )
     vd_source: str = Field(
         default="",

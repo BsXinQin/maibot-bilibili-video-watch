@@ -990,16 +990,63 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         await plugin._send_parts("stream-1", video, "看看")
         self.assertIn("播放", self.ctx.send.messages[0]["text"])
 
-    async def test_image_style_sends_cover_then_text(self):
+    async def test_image_style_sends_one_mixed_message(self):
         plugin = self._plugin(share={"style": "image"})
         video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
         self._cover(plugin)
         ok = await plugin._send_parts("stream-1", video, "看看这个")
         self.assertTrue(ok)
+        # 封面图和文字合成一条发出去，不再是两条独立消息
+        self.assertEqual(len(self.ctx.send.hybrids), 1)
+        self.assertEqual(self.ctx.send.images, [])
+        self.assertEqual(self.ctx.send.messages, [])
+        segments = self.ctx.send.hybrids[0]["segments"]
+        self.assertEqual([item["type"] for item in segments], ["image", "text"])
+        self.assertEqual(base64.b64decode(segments[0]["content"]), b"cover-bytes")
+        self.assertIn("看看这个", segments[1]["content"])
+        self.assertIn("【原神新版本测评】", segments[1]["content"])
+        self.assertIn("share_source=copy_web", segments[1]["content"])
+
+    async def test_image_style_can_still_send_two_messages(self):
+        plugin = self._plugin(share={"style": "image", "single_message": False})
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        self._cover(plugin)
+        ok = await plugin._send_parts("stream-1", video, "看看这个")
+        self.assertTrue(ok)
+        self.assertEqual(self.ctx.send.hybrids, [])
         self.assertEqual(len(self.ctx.send.images), 1)
-        self.assertEqual(
-            base64.b64decode(self.ctx.send.images[0]["data"]), b"cover-bytes"
-        )
+        self.assertIn("【原神新版本测评】", self.ctx.send.messages[0]["text"])
+
+    async def test_image_style_falls_back_when_hybrid_unsupported(self):
+        plugin = self._plugin(share={"style": "image"})
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        self._cover(plugin)
+        self.ctx.send.hybrid = None  # 老宿主没有 send.hybrid
+        ok = await plugin._send_parts("stream-1", video, "看看这个")
+        self.assertTrue(ok)
+        self.assertEqual(len(self.ctx.send.images), 1)
+        self.assertIn("【原神新版本测评】", self.ctx.send.messages[0]["text"])
+
+    async def test_image_style_falls_back_when_hybrid_fails(self):
+        plugin = self._plugin(share={"style": "image"})
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        self._cover(plugin)
+
+        async def failing_hybrid(segments, stream_id, **kwargs):
+            return {"success": False, "error": "未命中任何发送路由"}
+
+        self.ctx.send.hybrid = failing_hybrid
+        ok = await plugin._send_parts("stream-1", video, "看看这个")
+        self.assertTrue(ok)
+        self.assertEqual(len(self.ctx.send.images), 1)
+
+    async def test_image_style_single_message_without_cover_sends_text(self):
+        plugin = self._plugin(share={"style": "image"})
+        video = make_video(self.video_module)
+        self._cover(plugin, None)
+        ok = await plugin._send_parts("stream-1", video, "看看")
+        self.assertTrue(ok)
+        self.assertEqual(self.ctx.send.hybrids, [])
         self.assertIn("【原神新版本测评】", self.ctx.send.messages[0]["text"])
 
     async def test_image_style_falls_back_without_cover(self):
@@ -1238,7 +1285,7 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_degraded_card_is_recalled_and_falls_back(self):
         plugin = self._plugin(
-            share={"style": "card"},
+            share={"style": "card", "single_message": False},
             card={"api_base": "http://172.23.0.2:3000"},
         )
         plugin._register_stream_route("stream-1", group_id="123456")
@@ -1270,7 +1317,8 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ctx.send.images, [])
 
     async def test_card_style_without_api_falls_back_to_image(self):
-        plugin = self._plugin(share={"style": "card"})  # 没配卡片直发地址
+        # 卡片发不出去时退回图文；这里固定用「先图后字」两条，方便断言
+        plugin = self._plugin(share={"style": "card", "single_message": False})
         plugin._register_stream_route("stream-1", user_id="3482063535")
         video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
         self._cover(plugin)
@@ -1307,7 +1355,7 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ctx.send.messages, [])
 
     async def test_image_style_respects_shiwei_no_narrative(self):
-        plugin = self._plugin(share={"style": "image"})
+        plugin = self._plugin(share={"style": "image", "single_message": False})
         video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
         self._cover(plugin)
         await plugin._send_parts("stream-1", video, "这段文案不该出现", kind="shiwei")
@@ -1346,7 +1394,7 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_tuwen_degraded_falls_back_to_image(self):
         plugin = self._plugin(
-            share={"style": "card"},
+            share={"style": "card", "single_message": False},
             card={"api_base": "http://172.23.0.2:3000", "card_kind": "tuwen"},
         )
         plugin._register_stream_route("stream-1", group_id="123456")
@@ -1361,7 +1409,7 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_tuwen_failure_falls_back_to_image(self):
         plugin = self._plugin(
-            share={"style": "card"},
+            share={"style": "card", "single_message": False},
             card={"api_base": "http://172.23.0.2:3000", "card_kind": "tuwen"},
         )
         plugin._register_stream_route("stream-1", group_id="123456")
@@ -1390,7 +1438,7 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_degraded_card_is_remembered_and_skipped(self):
         plugin = self._plugin(
-            share={"style": "card"},
+            share={"style": "card", "single_message": False},
             card={"api_base": "http://172.23.0.2:3000", "access_token": "tok"},
         )
         plugin._register_stream_route("stream-1", group_id="123456")

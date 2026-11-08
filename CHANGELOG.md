@@ -5,6 +5,14 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.6.4] - 2026-11-08
+
+### 新增
+
+- 封面图和【标题】链接合成**一条消息**发出（以前是先发图、再发文字两条）：走宿主能力 `send.hybrid`，消息段是 `[{image}, {text}]`；宿主版本不支持 `send.hybrid` 或发送失败时，自动退回原来的「先图后字」两条，不会丢内容。
+- 新增配置 `[share].single_message`（默认 `true`）：想退回两条就设 `false`。
+- manifest 能力清单新增 `send.hybrid`。
+- 5 个新用例：合成一条、手动关闭、宿主没有 hybrid、hybrid 发送失败回退、没封面时只发文字。
 ## [1.6.3] - 2026-11-08
 
 ### 变更
