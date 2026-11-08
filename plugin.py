@@ -83,6 +83,7 @@ try:  # 宿主正常按包加载插件
     from .share_card import build_payload as build_card_payload
     from .share_card import check_card_message, fetch_mini_app_ark, recall_message
     from .share_card import fill_miniapp_payload
+    from .share_card import miniapp_variants
     from .share_card import send_json_card, send_json_card_ex, send_tuwen_ark
     from .store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
     from .textfilter import filter_comments, filter_danmaku
@@ -136,6 +137,7 @@ except ImportError:  # 兜底：插件目录被当作顶层模块加载时退回
     from share_card import build_payload as build_card_payload
     from share_card import check_card_message, fetch_mini_app_ark, recall_message
     from share_card import fill_miniapp_payload
+    from share_card import miniapp_variants
     from share_card import send_json_card, send_json_card_ex, send_tuwen_ark
     from store import COOLDOWN_ACTIVE_SEARCH, COOLDOWN_SHIWEI, SeenStore
     from textfilter import filter_comments, filter_danmaku
@@ -1985,6 +1987,16 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 timeout=timeout,
             )
             payload = fill_miniapp_payload(payload, ark)
+        alt_payloads = []
+        if kind != "news":
+            # 「带不带 bthirdappforward」两种版本都准备好：默认先发配置里的那种，
+            # QQ 没给回执（SnowLuma: delivery was not confirmed）就自动换另一种重发。
+            variants = miniapp_variants(
+                payload, forward=bool(getattr(card_cfg, "miniapp_forward", False))
+            )
+            if variants:
+                payload = variants[0]
+                alt_payloads = variants[1:]
         if caption:
             await self._send_text(stream_id, caption)
         ok, detail, message_id = await send_json_card_ex(
@@ -1994,6 +2006,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             user_id=user_id,
             payload=payload,
             timeout=timeout,
+            alt_payloads=alt_payloads,
         )
         if not ok:
             logger.warning("卡片分享失败（%s）：%s", video.bvid, detail)

@@ -10,7 +10,7 @@
 # 启用插件 —— 是否启用沁の刷B站视频
 enabled = true
 # 配置版本
-config_version = "1.5.4"
+config_version = "1.5.5"
 
 [schedule]
 # 刷取间隔（分钟） —— 每隔多少分钟自动刷一次 B 站：1=每分钟，60=每小时，1440=每天（可调范围 1 分钟 ~ 24 小时）
@@ -247,10 +247,12 @@ include_stats_line = false
 api_base = ""
 # 访问令牌 —— 上面那个接口的 Token，没设置就留空；SnowLuma 的 token 在它配置的 onebot_<uin>.json 里（accessToken）
 access_token = ""
-# 卡片类型 —— miniapp=小程序卡片（按手机上转发出来的真卡片逐字段复刻：appID / view_<分享模板ID> / bthirdappforward，不会再有「小程序已下架」）；tuwen=原生图文 Ark 卡片（不依赖小程序，SnowLuma 专有，做退路）；news=通用图文卡片（老版本 QQ 也能显示）
+# 卡片类型 —— miniapp=小程序卡片（按手机上转发出来的真卡片逐字段复刻：appID / view_<分享模板ID>，不会再有「小程序已下架」）；tuwen=原生图文 Ark 卡片（不依赖小程序，SnowLuma 专有，做退路）；news=通用图文卡片（老版本 QQ 也能显示）
 card_kind = "miniapp"
 # 用官方通道补空字段 —— miniapp 时再向 QQ 客户端要一份卡片（SnowLuma 的 get_mini_app_ark），只用来补本地模板里空着的字段（url / icon / token），结构永远用本地真模板；NapCat 没有这个动作就纯本地拼卡
 use_official_ark = true
+# 带 bthirdappforward 转发标记 —— 手机上那张卡是「转发」出来的所以带这个标记；但走协议直发时带上它，SnowLuma 常报 delivery was not confirmed（QQ 没给消息回执）。默认关；无论开关，发失败都会自动换另一种再试一次
+miniapp_forward = false
 # 失败退回图文 —— 卡片发不出去时，是否改发「封面图 + 文字」
 fallback_to_image = true
 # 回查并在被降级时改发图文 —— 发完用 get_msg 看这条消息，被 QQ 换成「发送者版本过低」就撤回，再改发封面图 + 文字

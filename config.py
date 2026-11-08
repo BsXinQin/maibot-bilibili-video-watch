@@ -43,7 +43,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.5.4",
+        default="1.5.5",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -705,7 +705,7 @@ class CardConfig(PluginConfigBase):
         default="miniapp",
         description=(
             "卡片样式：miniapp=B 站小程序卡片（按手机上转发出来的真卡片逐字段复刻："
-            "appID / view_<分享模板ID> / bthirdappforward，不会再出现「小程序已下架」）；"
+            "appID / view_<分享模板ID>，不会再出现「小程序已下架」）；"
             "tuwen=原生图文 Ark 卡片（不依赖小程序，SnowLuma 专有，可做退路）；"
             "news=通用图文卡片（structmsg，老版本 QQ 也能显示）"
         ),
@@ -719,6 +719,16 @@ class CardConfig(PluginConfigBase):
             "NapCat 没这个动作就纯本地拼卡"
         ),
         json_schema_extra={"label": "用官方通道补空字段"},
+    )
+    miniapp_forward: bool = Field(
+        default=False,
+        description=(
+            "小程序卡片是否带「第三方 App 转发」标记（bthirdappforward + config.forward=1）。"
+            "手机里那张卡是转发出来的所以带这两个标记，但走协议直发时带上它们，SnowLuma 常常报 "
+            "delivery was not confirmed（拿不到 message receipt）——所以默认关闭；"
+            "发失败会自动换另一种再试一次"
+        ),
+        json_schema_extra={"label": "带 bthirdappforward 转发标记"},
     )
     fallback_to_image: bool = Field(
         default=True,

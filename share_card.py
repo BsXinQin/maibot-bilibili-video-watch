@@ -115,6 +115,7 @@ def build_miniapp_payload(
     icon: str = BILIBILI_MINIAPP_ICON,
     host_uin: Any = 0,
     host_nick: str = "",
+    forward: bool = True,
 ) -> Dict[str, Any]:
     """按手机上那张真卡片的结构拼 1 张「B 站小程序」卡片。
 
@@ -152,7 +153,7 @@ def build_miniapp_payload(
         "showLittleTail": "",
         "shareOrigin": 0,
     }
-    return {
+    payload: Dict[str, Any] = {
         "app": "com.tencent.miniapp_01",
         "ver": "0.0.0.1",
         "appID": BILIBILI_MINIAPP_APPID,
@@ -161,7 +162,7 @@ def build_miniapp_payload(
         "desc": "",
         "config": {
             "height": 0,
-            "forward": 1,
+            "forward": 1 if forward else 0,
             "ctime": ctime,
             "width": 0,
             "type": "normal",
@@ -169,9 +170,14 @@ def build_miniapp_payload(
             "autoSize": 0,
         },
         "meta": {"detail_1": detail},
-        "bthirdappforward": True,
-        "bthirdappforwardforbackendswitch": True,
     }
+    if forward:
+        # 手机里那张卡是「转发」出来的，带这两个标记；走协议直发时带上它们
+        # SnowLuma 会拿不到 message receipt（日志 delivery was not confirmed），
+        # 所以默认不带，失败时再换带标记的版本重试一次。
+        payload["bthirdappforward"] = True
+        payload["bthirdappforwardforbackendswitch"] = True
+    return payload
 
 
 def _deep_fill(base: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
@@ -208,6 +214,62 @@ def fill_miniapp_payload(
         merged["view"] = view
         merged["appID"] = app_id
     return merged
+
+def apply_forward_flags(payload: Dict[str, Any], forward: bool) -> Dict[str, Any]:
+    """复制一份卡片，按需打开 / 去掉「第三方 App 转发」标记。
+
+    手机里那张真卡片带 ``bthirdappforward`` 与 ``config.forward=1``（它是被「转发」
+    出来的）。但走 QQ 协议直发时带上这些标记，SnowLuma 常常拿不到 message receipt：
+    日志里是 ``group message delivery was not confirmed: QQ returned no message
+    receipt``，于是上层以为没发出去、又补一遍图文。所以默认先发不带标记的版本。
+    """
+
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    out = copy.deepcopy(payload)
+    config = out.get("config")
+    if isinstance(config, dict):
+        config["forward"] = 1 if forward else 0
+    if forward:
+        out["bthirdappforward"] = True
+        out["bthirdappforwardforbackendswitch"] = True
+    else:
+        out.pop("bthirdappforward", None)
+        out.pop("bthirdappforwardforbackendswitch", None)
+    return out
+
+
+def miniapp_variants(
+    payload: Dict[str, Any], *, forward: bool = False
+) -> List[Dict[str, Any]]:
+    """给出「先发哪一版、不行再发哪一版」的卡片变体列表（第一个是首选）。"""
+
+    if not isinstance(payload, dict) or not payload:
+        return []
+    primary = apply_forward_flags(payload, forward)
+    alt = apply_forward_flags(payload, not forward)
+    return [primary, alt]
+
+
+UNCONFIRMED_MARKERS = (
+    "delivery was not confirmed",
+    "not confirmed",
+    "no message receipt",
+    "message receipt",
+    "未确认",
+    "无回执",
+    "没有回执",
+)
+
+
+def looks_unconfirmed(data: Any) -> bool:
+    """判断返回是不是「消息可能已发出，但 QQ 没给回执」（SnowLuma 的严格校验）。"""
+
+    text = _flatten_text(data).lower()
+    if not text:
+        return False
+    return any(marker in text for marker in UNCONFIRMED_MARKERS)
+
 
 def build_news_payload(
     *,
@@ -421,26 +483,24 @@ def _looks_unsupported(data: Any) -> bool:
     return "action" in text and ("未知" in text or "unknown" in text)
 
 
-async def send_json_card_ex(
+async def _send_card_once(
     api_base: str,
-    access_token: str = "",
+    access_token: str,
     *,
-    group_id: str = "",
-    user_id: str = "",
+    group_id: str,
+    user_id: str,
     payload: Dict[str, Any],
-    timeout: float = 8.0,
-) -> Tuple[bool, str, str]:
-    """把卡片直发给 QQ 客户端；返回 ``(是否成功, 说明, message_id)``。"""
+    timeout: float,
+) -> Tuple[bool, str, str, bool]:
+    """发一次卡片（内部自动在 send_group_msg / send_msg 之间切换）。
 
-    base = (api_base or "").strip()
-    if not base:
-        return False, "没有配置 OneBot HTTP 地址", ""
-    if not payload:
-        return False, "卡片内容是空的", ""
+    返回 ``(是否成功, 说明, message_id, 是否值得换一种卡片再试)``。
+    """
+
     target = _coerce_id(group_id)
     user = _coerce_id(user_id)
     if not target and not user:
-        return False, "没有可用的群号或 QQ 号", ""
+        return False, "没有可用的群号或 QQ 号", "", False
     segment = build_json_segment(payload)
     if target:
         attempts = [
@@ -455,7 +515,7 @@ async def send_json_card_ex(
 
     detail = ""
     for index, (action, body) in enumerate(attempts):
-        url = _api_url(base, action)
+        url = _api_url(api_base, action)
         try:
             data = await _post(url, body, access_token or "", timeout, use_header=True)
         except Exception as exc:  # noqa: BLE001 - 网络问题一律降级，不打断分享流程
@@ -463,16 +523,61 @@ async def send_json_card_ex(
             logger.warning("小程序卡片直发失败（%s）：%s", url, detail)
             if index + 1 < len(attempts):
                 continue
-            return False, "请求失败：" + detail[:200], ""
+            retry = any(item in detail.lower() for item in UNCONFIRMED_MARKERS)
+            return False, "请求失败：" + detail[:200], "", retry
         if response_ok(data):
             detail = response_detail(data)
             logger.info("小程序卡片已发送（%s）：%s", action, detail)
-            return True, detail, _message_id(data)
+            return True, detail, _message_id(data), False
         detail = response_detail(data)
         if index + 1 < len(attempts) and _looks_unsupported(data):
             logger.info("接口不认识 %s，改用 send_msg 再试：%s", action, detail)
             continue
         logger.warning("小程序卡片直发被拒绝（%s）：%s", url, detail)
+        return False, detail, "", looks_unconfirmed(data)
+    return False, detail, "", False
+
+
+async def send_json_card_ex(
+    api_base: str,
+    access_token: str = "",
+    *,
+    group_id: str = "",
+    user_id: str = "",
+    payload: Dict[str, Any],
+    timeout: float = 8.0,
+    alt_payloads: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[bool, str, str]:
+    """把卡片直发给 QQ 客户端；返回 ``(是否成功, 说明, message_id)``。
+
+    ``alt_payloads`` 是备选卡片：首页卡片被 QQ 判成「没收到回执」（比如带
+    ``bthirdappforward`` 时 SnowLuma 报 delivery was not confirmed）就换下一版重发。
+    """
+
+    base = (api_base or "").strip()
+    if not base:
+        return False, "没有配置 OneBot HTTP 地址", ""
+    if not payload:
+        return False, "卡片内容是空的", ""
+    variants = [payload]
+    for item in alt_payloads or []:
+        if isinstance(item, dict) and item:
+            variants.append(item)
+    detail = ""
+    for index, item in enumerate(variants):
+        ok, detail, message_id, retryable = await _send_card_once(
+            base,
+            access_token or "",
+            group_id=group_id,
+            user_id=user_id,
+            payload=item,
+            timeout=timeout,
+        )
+        if ok:
+            return True, detail, message_id
+        if index + 1 < len(variants) and retryable:
+            logger.info("QQ 没给回执（%s），换另一种卡片再试", detail[:160])
+            continue
         return False, detail, ""
     return False, detail, ""
 

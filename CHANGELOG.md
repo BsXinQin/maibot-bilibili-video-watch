@@ -5,6 +5,24 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [1.5.5] - 2026-11-08
+
+修「卡片明明发出去了，QQ 却说没有回执」。
+
+### 修复
+
+- **`group message delivery was not confirmed: QQ returned no message receipt`**：SnowLuma 对群消息做严格回执校验，带 `bthirdappforward`（手机那张卡是「转发」出来的，所以带这个标记）的 `json` 卡片常常只拿到 QQ 的 `result=0`、没有 `message_id`，于是 SnowLuma 抛错，插件以为失败又补一遍封面图 + 文字，群里看起来就是「卡片没了、只有图和字」。
+- `build_miniapp_payload()` 新增 `forward` 参数：`False` 时把 `config.forward` 置 0 并去掉 `bthirdappforward` / `bthirdappforwardforbackendswitch`。
+- 新增 `share_card.apply_forward_flags(payload, forward)`（复制一份再改，不就地改原 payload）与 `miniapp_variants(payload, forward=...)`（返回「首选 + 备选」两版卡片）。
+- 新增 `share_card.looks_unconfirmed(data)`：识别「没回执」类返回（`delivery was not confirmed` / `no message receipt` / `未确认` / `无回执` 等）。
+- `send_json_card_ex()` 新增 `alt_payloads`：首选卡片被回「没回执」时自动换下一版重发一次；风控之类的真失败不重发（避免重复发）。
+- 插件发送层：`_send_card()` 现在总是准备好两版卡片，默认先发**不带**转发标记的那版（`[card].miniapp_forward = false`）。
+
+### 新增
+
+- 配置 `[card].miniapp_forward`（默认 `false`）：想让首选卡片带手机那张卡的转发标记就打开。
+- 测试：`tests/test_share_style.py` 新增 9 个用例（`forward=False` 的 payload、`apply_forward_flags` 往返、`miniapp_variants` 顺序、`looks_unconfirmed`、没回执时换备选、真失败不换备选、默认发不带标记的那版、强制带标记、`news` 没有备选）。
+
 ## [1.5.4] - 2026-11-08
 
 小程序卡片改成按「手机里那张真卡片」逐字段复刻，不再靠猜。

@@ -434,6 +434,126 @@ class ShareCardTests(unittest.TestCase):
         self.assertTrue(detail.startswith("请求失败："), detail)
         self.assertEqual(len(calls), 2)
 
+    def test_miniapp_payload_can_drop_forward_flags(self):
+        # 手机那张卡是「转发」出来的，所以带 bthirdappforward；协议直发时带上它
+        # SnowLuma 会拿不到回执（delivery was not confirmed），因此可以关掉。
+        payload = self.card.build_miniapp_payload(
+            title="标题",
+            jump_url="https://www.bilibili.com/video/BV1TEST",
+            forward=False,
+        )
+        self.assertEqual(payload["config"]["forward"], 0)
+        self.assertNotIn("bthirdappforward", payload)
+        self.assertNotIn("bthirdappforwardforbackendswitch", payload)
+        # 去掉标记不影响卡片身份字段
+        self.assertEqual(payload["appID"], "100951776")
+        self.assertEqual(payload["view"], "view_8C8E89B49BE609866298ADDFF2DBABA4")
+
+    def test_apply_forward_flags_toggles(self):
+        base = _cover_ready_payload(self.card)
+        plain = self.card.apply_forward_flags(base, False)
+        self.assertEqual(plain["config"]["forward"], 0)
+        self.assertNotIn("bthirdappforward", plain)
+        again = self.card.apply_forward_flags(plain, True)
+        self.assertEqual(again["config"]["forward"], 1)
+        self.assertTrue(again["bthirdappforward"])
+        self.assertTrue(again["bthirdappforwardforbackendswitch"])
+        # 原 payload 不被就地改动
+        self.assertEqual(base["config"]["forward"], 1)
+        self.assertEqual(self.card.apply_forward_flags({}, True), {})
+
+    def test_miniapp_variants_order(self):
+        base = _cover_ready_payload(self.card)
+        variants = self.card.miniapp_variants(base, forward=False)
+        self.assertEqual(len(variants), 2)
+        self.assertEqual(variants[0]["config"]["forward"], 0)
+        self.assertNotIn("bthirdappforward", variants[0])
+        self.assertTrue(variants[1]["bthirdappforward"])
+        # 反过来也是一样：第一个永远是首选那版
+        flipped = self.card.miniapp_variants(base, forward=True)
+        self.assertTrue(flipped[0]["bthirdappforward"])
+        self.assertNotIn("bthirdappforward", flipped[1])
+        self.assertEqual(self.card.miniapp_variants({}), [])
+
+    def test_looks_unconfirmed(self):
+        self.assertTrue(
+            self.card.looks_unconfirmed(
+                {
+                    "status": "failed",
+                    "message": "group message delivery was not confirmed: QQ returned no message receipt",
+                }
+            )
+        )
+        self.assertTrue(self.card.looks_unconfirmed({"message": "消息未确认，无回执"}))
+        self.assertFalse(self.card.looks_unconfirmed({"status": "ok", "retcode": 0}))
+        self.assertFalse(self.card.looks_unconfirmed({"message": "卡片被风控拦截"}))
+        self.assertFalse(self.card.looks_unconfirmed("not a dict"))
+
+    def test_unconfirmed_tries_alt_payload(self):
+        calls = []
+
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            segment = body["message"][0]
+            payload = json.loads(segment["data"]["data"])
+            calls.append(payload)
+            if payload.get("bthirdappforward"):
+                return {
+                    "status": "failed",
+                    "message": "group message delivery was not confirmed: QQ returned no message receipt",
+                }
+            return {"status": "ok", "retcode": 0, "data": {"message_id": 9}}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        base = _cover_ready_payload(self.card)
+        variants = self.card.miniapp_variants(base, forward=True)
+        ok, detail, message_id = asyncio.run(
+            self.card.send_json_card_ex(
+                "http://172.23.0.2:3000",
+                "tok",
+                group_id="1083138200",
+                payload=variants[0],
+                alt_payloads=variants[1:],
+                timeout=1.0,
+            )
+        )
+
+        self.assertTrue(ok, detail)
+        self.assertEqual(message_id, "9")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0]["bthirdappforward"])
+        self.assertNotIn("bthirdappforward", calls[1])
+        self.assertEqual(calls[1]["config"]["forward"], 0)
+
+    def test_rejection_does_not_try_alt_payload(self):
+        calls = []
+
+        async def fake_post(url, body, token, timeout, *, use_header=True):
+            calls.append(url)
+            return {"status": "failed", "retcode": 1200, "message": "卡片被风控拦截"}
+
+        original = self.card._post
+        self.card._post = fake_post
+        self.addCleanup(lambda: setattr(self.card, "_post", original))
+
+        base = _cover_ready_payload(self.card)
+        ok, detail, _ = asyncio.run(
+            self.card.send_json_card_ex(
+                "http://172.23.0.2:3000",
+                "",
+                group_id="1083138200",
+                payload=base,
+                alt_payloads=[self.card.apply_forward_flags(base, False)],
+                timeout=1.0,
+            )
+        )
+
+        self.assertFalse(ok)
+        self.assertIn("风控", detail)
+        self.assertEqual(len(calls), 1)
+
     def test_fetch_mini_app_ark(self):
         calls = []
         card = {"ver": "1", "app": "com.tencent.miniapp_01", "view": "viewMultiMsg"}
@@ -767,6 +887,63 @@ class ShareStyleDispatchTests(unittest.IsolatedAsyncioTestCase):
         # 卡片前面那句随口话照发
         self.assertEqual(len(self.ctx.send.messages), 1)
         self.assertIn("快看这个", self.ctx.send.messages[0]["text"])
+
+    async def test_card_style_sends_plain_variant_by_default(self):
+        # 默认先发不带 bthirdappforward 的版本（带标记时 SnowLuma 报没有回执），
+        # 另一种版本作为 alt_payloads 交给发送层，被回「没回执」时自动换。
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000", "access_token": "tok"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        calls = self._stub_card()
+
+        ok = await plugin._send_parts("stream-1", video, "快看这个")
+        self.assertTrue(ok)
+        sent = calls["send"][0]
+        payload = sent["payload"]
+        self.assertNotIn("bthirdappforward", payload)
+        self.assertEqual(payload["config"]["forward"], 0)
+        alt = sent["alt_payloads"]
+        self.assertEqual(len(alt), 1)
+        self.assertTrue(alt[0]["bthirdappforward"])
+        self.assertEqual(alt[0]["config"]["forward"], 1)
+
+    async def test_card_style_can_force_forward_variant(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={
+                "api_base": "http://172.23.0.2:3000",
+                "access_token": "tok",
+                "miniapp_forward": True,
+            },
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        calls = self._stub_card()
+
+        ok = await plugin._send_parts("stream-1", video, "快看这个")
+        self.assertTrue(ok)
+        sent = calls["send"][0]
+        self.assertTrue(sent["payload"]["bthirdappforward"])
+        self.assertEqual(sent["payload"]["config"]["forward"], 1)
+        self.assertNotIn("bthirdappforward", sent["alt_payloads"][0])
+
+    async def test_news_kind_has_no_alt_payload(self):
+        plugin = self._plugin(
+            share={"style": "card"},
+            card={"api_base": "http://172.23.0.2:3000", "card_kind": "news"},
+        )
+        plugin._register_stream_route("stream-1", group_id="123456")
+        video = make_video(self.video_module, cover="//i0.hdslb.com/c.jpg")
+        calls = self._stub_card()
+
+        ok = await plugin._send_parts("stream-1", video, "快看这个")
+        self.assertTrue(ok)
+        sent = calls["send"][0]
+        self.assertEqual(sent["payload"]["view"], "news")
+        self.assertEqual(sent["alt_payloads"], [])
 
     async def test_card_style_prefers_official_ark(self):
         plugin = self._plugin(
