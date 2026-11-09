@@ -567,7 +567,9 @@ class _BilibiliClientBase:
         code = payload.get("code")
         if code != 0:
             message = _as_str(payload.get("message") or payload.get("msg")).strip()
-            raise BilibiliError(f"B 站接口错误 code={code}{('：' + message) if message else ''}")
+            hint = _CODE_HINTS.get(int(code)) if isinstance(code, int) else None
+            detail = "；".join(part for part in (message, hint) if part)
+            raise BilibiliError(f"B 站接口错误 code={code}{('：' + detail) if detail else ''}")
         return payload
 
     async def _get_json(self, url: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1115,6 +1117,16 @@ class BilibiliDetailMixin:
         if written == 0:
             raise BilibiliError("下载到的视频为空")
         return dest
+
+
+_CODE_HINTS = {
+    62002: "稿件不可见，可能已经删除、设为私密、仅粉丝/充电可见，或者需要填 Cookie 登录",
+    62004: "稿件还在审核中，暂时看不了",
+    62012: "这条稿件只有 UP 主自己能看",
+    -404: "视频不存在，检查一下链接或 BV 号",
+    -403: "没有访问权限",
+    53013: "账号被风控，稍后再试",
+}
 
 
 class BilibiliClient(BilibiliDetailMixin, _BilibiliClientBase):

@@ -116,17 +116,32 @@ class ReviewFixesTestCase(unittest.IsolatedAsyncioTestCase):
 
     # -- 工具走白名单 ---------------------------------------------------
 
-    async def test_search_tool_rejects_non_whitelisted_stream(self) -> None:
+    async def test_search_tool_outside_whitelist_only_reports(self) -> None:
+        """白名单外也能搜，只是不往会话里发，把结果交给模型。"""
+
         plugin = self.make_plugin(
             client=FakeClient(
                 videos=[], search_results=[make_video(self.video_module, bvid="BVS9")]
             )
         )
         result = await plugin.tool_bili_search(stream_id="other-stream", query="原神")
-        self.assertFalse(result["success"])
-        self.assertIn("白名单", result["error"])
-        joined = "\n".join(item["text"] for item in self.ctx.send.messages)
-        self.assertNotIn("bilibili.com/video", joined)
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["shared"], [])
+        self.assertIn("没有往会话里发", result["content"])
+        self.assertIn("bilibili.com/video", result["content"])
+        self.assertEqual(self.ctx.send.messages, [])
+
+    async def test_search_tool_in_whitelist_still_sends(self) -> None:
+        """白名单内的会话照旧：搜完直接发到群里。"""
+
+        plugin = self.make_plugin(
+            client=FakeClient(
+                videos=[], search_results=[make_video(self.video_module, bvid="BVS6")]
+            )
+        )
+        result = await plugin.tool_bili_search(stream_id="stream-1", query="原神")
+        self.assertTrue(result["success"], result)
+        self.assertEqual(len(self.ctx.send.messages), 1)
 
     # -- 工具参数校验 ---------------------------------------------------
 

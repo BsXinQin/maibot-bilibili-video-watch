@@ -1,6 +1,6 @@
 # 沁の刷B站视频（MaiBot 插件）
 
-[![version](https://img.shields.io/badge/version-2.0.1-ff69b4)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.1.0-ff69b4)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-MaiBot-00a1d6)](https://github.com/MaiBot-chan/MaiBot)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -11,7 +11,7 @@
 
 反过来它也能**读群友贴的视频**：别人贴链接就自动快速读一遍（brief，不花识图钱），有人 @ 它或者说「详细看看」时才深度读（full，带字幕时间轴、弹幕时间线，并抽帧看画面）。
 
-> 当前版本 **v2.0.1** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文（封面图和链接可合成一条）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
+> 当前版本 **v2.1.0** · 全部配置项已中文化 · 活跃时段可多段（能给午休留空档）· 分享可选文字 / 封面图文（封面图和链接可合成一条）· 读视频分 brief / full 两档 · 能把视频里的梗学进黑话库
 > 逐版本变更见 [CHANGELOG.md](CHANGELOG.md) · 从旧版（上游 id）换过来请看[安装说明](#1-安装)
 
 ## 目录
@@ -170,7 +170,7 @@ auto_interests = []                  # 自动提取的兴趣，插件会自己�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用插件（`false` 时完全不工作） |
-| `config_version` | `2.0.1` | 配置版本号，由插件维护，一般不要手动改 |
+| `config_version` | `2.1.0` | 配置版本号，由插件维护，一般不要手动改 |
 
 ### `[schedule]` 刷取频率
 
@@ -479,7 +479,7 @@ max_share_per_round = 0           # 该流每轮最多几个，0 = 用 [schedule
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
 | `bili_read` | `url` 必填；`detail` 可选（`brief` / `full`） | 读一个 B 站视频：标题、UP、简介、分P、字幕、热评、弹幕；`full` 另带字幕时间轴、弹幕时间线与画面描述 |
-| `bili_search` | `query` 必填；`count` 可选 | 按关键词搜 B 站并挑一条分享到当前会话；受 `search_cooldown_seconds` 冷却，**只在白名单会话里生效** |
+| `bili_search` | `query` 必填；`count` 可选 | 按关键词搜 B 站；白名单会话里直接挑一条分享到当前会话（受 `search_cooldown_seconds` 冷却），**白名单外只返回候选、不发送** |
 | `bili_learn_meme` | `url` 必填；`hint` 可选 | 从视频里学梗并写进麦麦黑话库；`hint` 是用户点名要学的梗。受 `[meme].enabled` 控制，默认关闭 |
 
 三个工具都对 Planner 直接可见（`core_tool` + `visibility="visible"`），不需要先 `tool_search`，也不用派子代理空转等待。
@@ -651,6 +651,7 @@ python tools/probe_persona.py --data-dir "<MaiBot>\data\plugins\github.BsXinQin.
 
 ## 版本
 
+- **v2.1.0**：`bili_search` 不再限白名单——任何会话都能搜，白名单外只把候选交给模型、不发送；分享成功后把视频信息写进会话上下文，麦麦之后聊得起来；B 站错误码加上中文解释（62002 稿件不可见等）
 - **v2.0.1**：随口一句超字数时改成按句读裁剪，不再追加「…」（以前会出现「数据图看着还…」这种残句）；`_send_parts()` 统一裁一次，名单里复用的旧长文案也会被裁到上限内。
 - **v2.0.0**：**删掉整个 QQ 小程序卡片功能**（`[card]` 整节配置、`card_caption`、`share_card.py` 与所有卡片回退 / 回查逻辑）。QQ 对协议端发的 ark 有客户端版本校验，一律在服务端降级成「发送者版本过低，无法展示内容」，留着只会多一堆看不懂的开关。分享形式现在只有 `text` / `image` 两种；配置里如果还留着 `style = card`，2.0.0 会自动按 `image` 发并在日志里提示一次。
 - **v1.7.0**：删掉「赤石视频」整块（`bili_shiwei` 工具、`[shiwei]` 配置节、`share_shiwei` 与相关冷却常量）；想整活直接让麦麦用 `bili_search` 自己搜

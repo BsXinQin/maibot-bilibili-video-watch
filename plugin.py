@@ -2041,45 +2041,51 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         style = self._share_style()
         if style == "image":
             if await self._send_image_parts(stream_id, video, line, header, stats):
+                await self._remember_share(stream_id, video, line)
                 return True
-            return await self._send_text(stream_id, message)
-        return await self._send_text(stream_id, message)
+            if await self._send_text(stream_id, message):
+                await self._remember_share(stream_id, video, line)
+                return True
+            return False
+        if await self._send_text(stream_id, message):
+            await self._remember_share(stream_id, video, line)
+            return True
+        return False
+
+    async def _remember_share(self, stream_id: str, video: Video, line: str) -> None:
+        """把刚分享的视频写进会话上下文，让麦麦之后聊得起来。"""
+
+        config = self.config
+        url = build_share_link(video.url, getattr(config.share, "vd_source", ""))
+        parts = [f"（我刚把这个 B 站视频分享到聊天里：{video.title}）", f"链接：{url}"]
+        if video.owner:
+            parts.append(f"UP 主：{video.owner}")
+        parts.append(
+            f"数据：{video.play} 播放 · {video.like} 点赞 · 时长 {video.duration_label}"
+        )
+        desc = clip_casual(video.description or "", 120)
+        if desc:
+            parts.append(f"简介：{desc}")
+        if line:
+            parts.append(f"我当时配的那句随口话：{line}")
+        text = "\n".join(parts) + "\n（别人问起「你刚发的视频」就用这些信息答，不用再搜）"
+        await self._append_note(stream_id, text, visible="刚分享了一个 B 站视频")
 
     # -- 主动搜索 ------------------------------------------------------
 
-    async def search_and_share(
-        self, query: str, stream_id: str, *, limit: int = 1
-    ) -> Dict[str, Any]:
-        """响应用户要求主动搜索并分享（有独立冷却）。"""
+    async def _search_ranked_videos(self, query: str) -> Tuple[List[Video], str]:
+        """按关键词搜一轮并打分排序；返回（视频列表, 错误信息）。"""
 
         config = self.config
-        query = (query or "").strip()
-        if not query:
-            return {"ok": False, "reason": "empty_query"}
-        if not config.plugin.enabled:
-            return {"ok": False, "reason": "disabled"}
-        if self._client is None or self._store is None:
-            return {"ok": False, "reason": "not_loaded"}
-        # 主动搜索也只在白名单会话里生效，避免任意群里一句话就让模型把视频发过去
-        allowed = await self._ensure_allowed_streams()
-        if stream_id not in allowed:
-            logger.debug("会话 %s 不在白名单，忽略主动搜索请求", stream_id)
-            return {"ok": False, "reason": "not_allowed"}
-
-        remaining = self._store.cooldown_remaining(
-            COOLDOWN_ACTIVE_SEARCH, config.schedule.search_cooldown_seconds
-        )
-        if remaining > 0:
-            return {"ok": False, "reason": "cooldown", "remaining": int(remaining)}
-
         try:
-            found = await self._client.fetch_search(query, page=1, order=config.sources.search_order)
+            found = await self._client.fetch_search(
+                query, page=1, order=config.sources.search_order
+            )
         except BilibiliError as exc:
-            return {"ok": False, "reason": "fetch_failed", "error": str(exc)}
+            return [], f"搜索失败：{exc}"
         videos = self._prefilter(found)
         if not videos:
-            return {"ok": False, "reason": "no_candidates"}
-
+            return [], "没搜到合适的视频"
         profile = InterestProfile()
         profile.add(query, config.interest.explicit_weight)
         results = rank_videos(
@@ -2104,11 +2110,71 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             tag_weight=config.interest.tag_weight,
         )
         if not results:
-            return {"ok": False, "reason": "filtered_out"}
+            return [], "搜到的视频都被过滤规则挡掉了"
+        return [result.video for result in results], ""
+
+    async def search_for_reply(self, query: str, limit: int = 3) -> Dict[str, Any]:
+        """任何会话都能搜：只把候选交给模型，不往会话里发消息。"""
+
+        config = self.config
+        query = (query or "").strip()
+        if not query:
+            return {"ok": False, "reason": "empty_query"}
+        if not config.plugin.enabled:
+            return {"ok": False, "reason": "disabled"}
+        if self._client is None or self._store is None:
+            return {"ok": False, "reason": "not_loaded"}
+        videos, error = await self._search_ranked_videos(query)
+        if error:
+            return {"ok": False, "reason": "fetch_failed", "error": error}
+        picked = videos[: max(1, min(5, int(limit or 3)))]
+        vd_source = getattr(config.share, "vd_source", "")
+        candidates: List[Dict[str, Any]] = []
+        for video in picked:
+            candidates.append(
+                {
+                    "title": video.title,
+                    "url": build_share_link(video.url, vd_source),
+                    "up": video.owner,
+                    "play": int(video.play),
+                    "like": int(video.like),
+                    "duration": video.duration_label,
+                    "desc": clip_casual(video.description or "", 120),
+                }
+            )
+        return {"ok": bool(candidates), "query": query, "candidates": candidates}
+    async def search_and_share(
+        self, query: str, stream_id: str, *, limit: int = 1
+    ) -> Dict[str, Any]:
+        """响应用户要求主动搜索并分享（有独立冷却）。"""
+
+        config = self.config
+        query = (query or "").strip()
+        if not query:
+            return {"ok": False, "reason": "empty_query"}
+        if not config.plugin.enabled:
+            return {"ok": False, "reason": "disabled"}
+        if self._client is None or self._store is None:
+            return {"ok": False, "reason": "not_loaded"}
+        # 「把视频推进会话」仍然只限白名单会话；不在白名单的会话走 search_for_reply，
+        # 只把候选交给模型看，不发送。
+        allowed = await self._ensure_allowed_streams()
+        if stream_id not in allowed:
+            logger.debug("会话 %s 不在白名单，只搜索不发送", stream_id)
+            return {"ok": False, "reason": "not_allowed"}
+
+        remaining = self._store.cooldown_remaining(
+            COOLDOWN_ACTIVE_SEARCH, config.schedule.search_cooldown_seconds
+        )
+        if remaining > 0:
+            return {"ok": False, "reason": "cooldown", "remaining": int(remaining)}
+
+        videos, error = await self._search_ranked_videos(query)
+        if error:
+            return {"ok": False, "reason": "no_candidates", "error": error}
 
         shared: List[str] = []
-        for result in results[: max(1, int(limit))]:
-            video = result.video
+        for video in videos[: max(1, int(limit))]:
             cached = self._store.get(video.bvid)
             if cached and (cached.get("narrative") or cached.get("summary")):
                 # 名单内视频再次分享：直接复用之前的介绍文案，不重新生成
@@ -2843,7 +2909,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             "按关键词搜索 B 站视频，并把最相关的一条分享到当前聊天。"
             "用户说「搜点 XX 视频」「找个 XX 的 B 站视频发群里」时用它；"
             "工具会自己完成搜索、过滤、打分和发送，不需要再调用 send。"
-            "只能在插件白名单聊天流里使用。"
+            "白名单聊天流里会直接把视频发到群里；其他聊天流只返回搜索结果（标题、链接、数据），不发送。"
         ),
         parameters=[
             ToolParameterInfo(
@@ -2876,6 +2942,43 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             limit = max(1, min(3, int(count or 1)))
         except (TypeError, ValueError):
             limit = 1
+        allowed = await self._ensure_allowed_streams()
+        if stream_id not in allowed:
+            # 白名单外的会话也能搜，只是不往会话里发，把候选交回给模型
+            found = await self.search_for_reply(query, limit)
+            if not found.get("ok"):
+                reason = str(found.get("reason") or "")
+                fail_messages = {
+                    "disabled": "插件已禁用",
+                    "no_candidates": "没搜到合适的视频",
+                    "fetch_failed": str(found.get("error") or "搜索失败"),
+                }
+                return {
+                    "success": False,
+                    "error": fail_messages.get(reason, f"搜索没有成功：{reason}"),
+                }
+            candidates = list(found["candidates"])
+            lines = [
+                f"搜到 {len(candidates)} 条（这个会话不在自动分享白名单，结果只给你看，没有往会话里发）："
+            ]
+            for index, item in enumerate(candidates, start=1):
+                meta_bits = []
+                if item.get("up"):
+                    meta_bits.append("UP：" + str(item["up"]))
+                meta_bits.append(str(item.get("play") or 0) + " 播放")
+                meta_bits.append(str(item.get("like") or 0) + " 点赞")
+                if item.get("duration"):
+                    meta_bits.append(str(item["duration"]))
+                lines.append("{0}. 【{1}】 {2}".format(index, item["title"], item["url"]))
+                lines.append("   " + " · ".join(meta_bits))
+                if item.get("desc"):
+                    lines.append("   " + str(item["desc"]))
+            return {
+                "success": True,
+                "content": "\n".join(lines),
+                "shared": [],
+                "candidates": candidates,
+            }
         result = await self.search_and_share(query, stream_id, limit=limit)
         if result.get("ok"):
             shared = list(result.get("shared") or [])
