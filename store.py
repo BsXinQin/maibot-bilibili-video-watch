@@ -66,6 +66,8 @@ class SeenStore:
         self._cooldowns: Dict[str, float] = {}
         self._auto_interests: Dict[str, List[str]] = {}
         self._meta: Dict[str, Any] = {}
+        # 每日分享计数：{"2026-11-11": {"__all__": 3, "<stream_id>": 1}}
+        self._daily: Dict[str, Dict[str, int]] = {}
         self._loaded = False
 
     # ------------------------------------------------------------------
@@ -127,6 +129,19 @@ class SeenStore:
         meta = data.get("meta")
         if isinstance(meta, dict):
             self._meta = dict(meta)
+        daily = data.get("daily")
+        if isinstance(daily, dict):
+            for day, counters in daily.items():
+                if not isinstance(counters, dict):
+                    continue
+                clean: Dict[str, int] = {}
+                for key, value in counters.items():
+                    try:
+                        clean[str(key)] = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                if clean:
+                    self._daily[str(day)] = clean
         self._prune()
 
     def save(self) -> None:
@@ -139,6 +154,7 @@ class SeenStore:
             "cooldowns": self._cooldowns,
             "auto_interests": self._auto_interests,
             "meta": self._meta,
+            "daily": self._daily,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self.path.with_name(self.path.name + ".tmp")
@@ -171,6 +187,14 @@ class SeenStore:
             )
             for bvid, _record in ordered[: len(self._videos) - self.max_records]:
                 self._videos.pop(bvid, None)
+        # 每日计数只保留最近 7 天（够统计用，也不会让状态文件膨胀）
+        if self._daily:
+            keep = {
+                time.strftime("%Y-%m-%d", time.localtime(now - offset * 86400.0))
+                for offset in range(7)
+            }
+            for day in [key for key in self._daily if key not in keep]:
+                self._daily.pop(day, None)
 
     def is_seen(self, bvid: str, *, now: Optional[float] = None) -> bool:
         """视频是否已经在「已刷名单」里（名单内的不再自动分享）。"""
@@ -245,6 +269,61 @@ class SeenStore:
 
     def all_videos(self) -> Dict[str, Dict[str, Any]]:
         return {bvid: dict(record) for bvid, record in self._videos.items()}
+
+    # ------------------------------------------------------------------
+    # 每日分享计数
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _day_key(now: Optional[float] = None) -> str:
+        """本地日期字符串，用来分天统计。"""
+
+        moment = time.time() if now is None else float(now)
+        return time.strftime("%Y-%m-%d", time.localtime(moment))
+
+    def shares_today(self, stream_id: str = "", *, now: Optional[float] = None) -> int:
+        """今天这个会话已经分享了几条；stream_id 留空时返回全部会话的总数。"""
+
+        counters = self._daily.get(self._day_key(now)) or {}
+        key = str(stream_id or "__all__")
+        try:
+            return max(0, int(counters.get(key) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def total_today(self, *, now: Optional[float] = None) -> int:
+        """今天所有会话一共分享了几条。"""
+
+        return self.shares_today("", now=now)
+
+    def note_shared_today(self, stream_id: str = "", *, now: Optional[float] = None) -> int:
+        """记一条今天的分享（会话级 + 全局各 +1），返回该会话今天的新计数。"""
+
+        day = self._day_key(now)
+        counters = self._daily.setdefault(day, {})
+        key = str(stream_id or "__all__")
+        counters[key] = max(0, int(counters.get(key) or 0)) + 1
+        if key != "__all__":
+            counters["__all__"] = max(0, int(counters.get("__all__") or 0)) + 1
+        return counters[key]
+
+    def daily_remaining(self, stream_id: str, limit: int, *, now: Optional[float] = None) -> int:
+        """今天这个会话还能分享几条；limit <= 0 表示不限制。"""
+
+        limit = int(limit or 0)
+        if limit <= 0:
+            return 10 ** 6
+        return max(0, limit - self.shares_today(stream_id, now=now))
+
+    def daily_summary(self, *, now: Optional[float] = None) -> Dict[str, int]:
+        """今天的计数快照（写日志 / 给工具回执用）。"""
+
+        counters = self._daily.get(self._day_key(now)) or {}
+        return {
+            str(key): max(0, int(value or 0))
+            for key, value in counters.items()
+            if str(key)
+        }
 
     # ------------------------------------------------------------------
     # 冷却

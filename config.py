@@ -42,7 +42,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="2.1.0",
+        default="2.2.0",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -91,6 +91,13 @@ class ScheduleConfig(PluginConfigBase):
         le=10,
         description="每个聊天流每轮最多分享几个视频",
         json_schema_extra={"label": "每轮最多分享（个）"},
+    )
+    max_share_per_day: int = Field(
+        default=10,
+        ge=0,
+        le=200,
+        description="每个聊天流每天最多分享几个视频（含主动搜索发出去的）；0 表示不限制",
+        json_schema_extra={"label": "每天最多分享（个，0=不限）"},
     )
     search_cooldown_seconds: int = Field(
         default=300,
@@ -977,6 +984,13 @@ class StreamTargetConfig(PluginConfigBase):
         le=10,
         description="该流每轮最多分享几个视频；0 表示使用「刷取频率」里的每轮最多分享",
         json_schema_extra={"label": "该流每轮最多分享"},
+    )
+    max_share_per_day: int = Field(
+        default=0,
+        ge=0,
+        le=200,
+        description="该流每天最多分享几个视频；0 表示沿用「刷取频率」里的每天上限",
+        json_schema_extra={"label": "该流每天最多分享（0=沿用全局）"},
     )
 
 

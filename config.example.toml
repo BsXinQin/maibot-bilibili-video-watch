@@ -10,7 +10,7 @@
 # 启用插件 —— 是否启用沁の刷B站视频
 enabled = true
 # 配置版本
-config_version = "2.1.0"
+config_version = "2.2.0"
 
 [schedule]
 # 刷取间隔（分钟） —— 每隔多少分钟自动刷一次 B 站：1=每分钟，60=每小时，1440=每天（可调范围 1 分钟 ~ 24 小时）
@@ -23,6 +23,8 @@ run_on_start = true
 active_hours = ""
 # 每轮最多分享（个） —— 每个聊天流每轮最多分享几个视频
 max_share_per_round = 1
+# 每天最多分享（个） —— 每个聊天流每天最多分享几个视频（自动分享 + 主动搜索都算）；0 表示不限制
+max_share_per_day = 10
 # 主动搜索冷却（秒） —— 用户主动要求搜索分享的冷却秒数（默认 300=5 分钟）；与自动分享频率互不影响
 search_cooldown_seconds = 300
 
@@ -335,3 +337,5 @@ debug = false
 # auto_interest = true
 # 该流每轮最多分享
 # max_share_per_round = 0
+# 该流每天最多分享（0 = 沿用上面「刷取频率」里的每天上限）
+# max_share_per_day = 0

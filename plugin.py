@@ -885,6 +885,16 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             self._flush_pending_config_writes()
             return summary
 
+    def _save_store(self) -> None:
+        """立即把状态写盘（分享成功后调用，避免重载丢记录）。"""
+
+        if self._store is None:
+            return
+        try:
+            self._store.save()
+        except Exception as exc:  # noqa: BLE001 - 写盘失败不该影响分享本身
+            logger.warning("写入状态文件失败：%s", exc)
+
     async def _process_target(
         self,
         target: Any,
@@ -903,6 +913,25 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             "matched": [],
             "bvids": [],
         }
+        # 每日分享上限：会话自己配了就用会话的，否则用「刷取频率」里的，0 = 不限
+        daily_limit = int(
+            getattr(target, "max_share_per_day", 0)
+            or config.schedule.max_share_per_day
+            or 0
+        )
+        shared_today = self._store.shares_today(stream_id)
+        remaining_today = self._store.daily_remaining(stream_id, daily_limit)
+        detail["daily_limit"] = daily_limit
+        detail["shared_today"] = shared_today
+        if remaining_today <= 0:
+            logger.info(
+                "会话 %s 今天已经分享 %s 条（每天上限 %s），本轮跳过",
+                detail["target"],
+                shared_today,
+                daily_limit,
+            )
+            detail["skipped"] = "daily_limit_reached"
+            return detail
         allowed = [item.strip() for item in (target.categories or []) if item and item.strip()]
         candidates = [
             video
@@ -956,6 +985,8 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             return detail
 
         limit = int(target.max_share_per_round or config.schedule.max_share_per_round or 1)
+        # 今天剩下的额度比每轮额度小时，按剩下的一起算
+        limit = max(1, min(limit, remaining_today))
         picked = await self._pick_candidates(results, profile, limit)
         shared: List[str] = []
         for result, judged in picked:
@@ -976,6 +1007,10 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                     narrative=narrative_text,
                     stream_id=stream_id,
                 )
+                self._store.note_shared_today(stream_id)
+                # 分享成功立刻落盘：以前只在轮末保存，中途重载/崩溃会让这条记录丢掉，
+                # 下一轮就会把同一个视频再发一次。
+                self._save_store()
                 shared.append(result.video.bvid)
         detail["shared"] = len(shared)
         detail["bvids"] = shared
@@ -1355,6 +1390,37 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         if found:
             self._bot_account_ids = found
         return self._bot_account_ids
+
+    def _target_for_stream(self, stream_id: str) -> Any:
+        """按 stream_id 找回白名单里的那条配置（找不到返回 None）。"""
+
+        sid = str(stream_id or "").strip()
+        if not sid:
+            return None
+        route = self._stream_routes.get(sid) or {}
+        group_id = str(route.get("group_id") or "").strip()
+        user_id = str(route.get("user_id") or "").strip()
+        for target in getattr(self.config, "streams", None) or []:
+            if str(getattr(target, "stream_id", "") or "").strip() == sid:
+                return target
+            target_group = str(getattr(target, "group_id", "") or "").strip()
+            target_user = str(getattr(target, "user_id", "") or "").strip()
+            if target_group and group_id and target_group == group_id:
+                return target
+            if target_user and user_id and target_user == user_id:
+                return target
+        return None
+
+    def _daily_limit_for(self, stream_id: str) -> int:
+        """这个会话的每日分享上限；0 表示不限制。"""
+
+        config = self.config
+        target = self._target_for_stream(stream_id)
+        return int(
+            getattr(target, "max_share_per_day", 0)
+            or getattr(config.schedule, "max_share_per_day", 0)
+            or 0
+        )
 
     async def _ensure_allowed_streams(self) -> Set[str]:
         """白名单集合为空或过期时重新解析。"""
@@ -1841,7 +1907,18 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             # - 宿主 1.3.15 / SDK 2.16（return_details=False）：{"success": bool}
             # - 旧版或 return_details=True：{"sent": bool, "message_id": ...}
             if "sent" in result:
-                return bool(result.get("sent"))
+                if result.get("sent"):
+                    return True
+                if result.get("success"):
+                    # 宿主说成功了，只是没拿到平台回执。按已发送处理：判失败会导致
+                    # 这条视频不记入已刷名单与今日计数，下一轮又被发一遍。
+                    logger.info(
+                        "发送%s没有平台回执（%s），按已发送处理",
+                        label,
+                        stream_id,
+                    )
+                    return True
+                return False
             if "success" in result:
                 if not result.get("success"):
                     logger.warning(
@@ -2169,21 +2246,37 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         if remaining > 0:
             return {"ok": False, "reason": "cooldown", "remaining": int(remaining)}
 
+        # 每日上限对主动搜索同样生效（用户要求也别把一天的量刷爆）
+        daily_limit = self._daily_limit_for(stream_id)
+        remaining_today = self._store.daily_remaining(stream_id, daily_limit)
+        if remaining_today <= 0:
+            return {
+                "ok": False,
+                "reason": "daily_limit_reached",
+                "error": "今天这个会话已经分享到上限了（每天 %s 条），明天再来吧" % daily_limit,
+                "shared_today": self._store.shares_today(stream_id),
+            }
+
         videos, error = await self._search_ranked_videos(query)
         if error:
             return {"ok": False, "reason": "no_candidates", "error": error}
 
         shared: List[str] = []
-        for video in videos[: max(1, int(limit))]:
+        for video in videos[: max(1, min(int(limit), remaining_today))]:
             cached = self._store.get(video.bvid)
             if cached and (cached.get("narrative") or cached.get("summary")):
                 # 名单内视频再次分享：直接复用之前的介绍文案，不重新生成
-                await self._send_parts(
-                    stream_id,
-                    video,
-                    str(cached.get("narrative") or cached.get("summary") or ""),
-                )
-                shared.append(video.bvid)
+                reused = str(cached.get("narrative") or cached.get("summary") or "")
+                if await self._send_parts(stream_id, video, reused):
+                    self._store.mark_shared(
+                        video,
+                        narrative=reused,
+                        kind="search",
+                        stream_id=stream_id,
+                    )
+                    self._store.note_shared_today(stream_id)
+                    self._save_store()
+                    shared.append(video.bvid)
                 continue
             danmaku, comments, subtitle = await self._collect_detail(video)
             judged = None
@@ -2208,8 +2301,11 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 self._store.mark_shared(
                     video,
                     narrative=narrative_text,
+                    kind="search",
                     stream_id=stream_id,
                 )
+                self._store.note_shared_today(stream_id)
+                self._save_store()
                 shared.append(video.bvid)
 
         if shared:

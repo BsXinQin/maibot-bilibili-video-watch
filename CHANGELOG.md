@@ -5,6 +5,19 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [2.2.0] - 2026-11-11
+
+### 新增
+
+- **每日分享上限**：`[schedule].max_share_per_day`（默认 10，0 = 不限制），`[[streams]].max_share_per_day` 可以给单个流单独设（0 = 沿用全局）。自动分享和 `bili_search` 主动搜索都计入，额度用完这一轮直接跳过（日志里是 `daily_limit_reached`）。
+- 计数存在 `state.json` 的 `daily` 里（按本地日期分天），只保留最近 7 天，不会一直变大。
+
+### 修复
+
+- **同一个视频被重复分享**：以前只在整轮跑完才写 `state.json`，中途重载插件 / 跑到一半崩掉，这一轮的「已分享」记录就丢了，下一轮又把同一个视频发一遍。现在每次分享成功立刻落盘。
+- 宿主返回 `{"success": true, "sent": false}`（成功了但没拿到平台回执）时不再判成发送失败——判失败同样会导致不记名单、下一轮重发。
+- `bili_search` 命中名单内视频时也会正常登记与计数（以前复用旧文案发出去后直接 `continue`，`shared_count` 和今天条数都没涨）。
+
 ## [2.1.0] - 2026-11-09
 
 ### 改动
