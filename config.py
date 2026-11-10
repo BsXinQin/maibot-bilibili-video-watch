@@ -42,7 +42,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="2.2.0",
+        default="2.3.0",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -881,8 +881,20 @@ class MemeConfig(PluginConfigBase):
     )
     auto_learn: bool = Field(
         default=True,
-        description="贴的视频标题命中「梗 / 梗指南 / 什么梗」之类的词时，读完顺手学一次（同一个视频只学一次）",
-        json_schema_extra={"label": "梗类视频自动学"},
+        description="自动学梗总开关：贴进来的梗类视频（标题命中「梗 / 梗指南 / 什么梗」等）读完顺手学一次",
+        json_schema_extra={"label": "自动学梗"},
+    )
+    auto_from_share: bool = Field(
+        default=True,
+        description="定时刷 / 主动搜索分享成功的视频也交给模型判断一次是不是梗（是才入库）。每个视频只判断一次",
+        json_schema_extra={"label": "分享的视频也学"},
+    )
+    auto_max_per_day: int = Field(
+        default=3,
+        ge=0,
+        le=50,
+        description="自动学梗每天最多判断几个（0 表示不限）；每判断一个要多调一次模型",
+        json_schema_extra={"label": "每天自动学梗上限"},
     )
     llm_task: str = Field(
         default="",

@@ -586,6 +586,8 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         self._private_stream_ids: Set[str] = set()
         # 学梗：已经学过的视频（bvid），同一个视频不重复学
         self._meme_learned: Set[str] = set()
+        # 后台任务（自动学梗、分享后补学）：卸载时统一取消
+        self._bg_tasks: Set[asyncio.Task] = set()
 
     # -- 生命周期 ------------------------------------------------------
 
@@ -695,6 +697,12 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 pass
             except Exception as exc:  # noqa: BLE001
                 logger.warning("后台任务退出时出错：%s", exc)
+        pending = [task for task in list(self._bg_tasks) if not task.done()]
+        for task in pending:
+            task.cancel()
+        self._bg_tasks.clear()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         if self._store is not None:
             try:
                 self._store.save()
@@ -1011,6 +1019,8 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 # 分享成功立刻落盘：以前只在轮末保存，中途重载/崩溃会让这条记录丢掉，
                 # 下一轮就会把同一个视频再发一次。
                 self._save_store()
+                # 分享出去的视频顺手交给后台学梗（2.3.0）
+                self._schedule_meme_learn(result.video, stream_id)
                 shared.append(result.video.bvid)
         detail["shared"] = len(shared)
         detail["bvids"] = shared
@@ -2276,6 +2286,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                     )
                     self._store.note_shared_today(stream_id)
                     self._save_store()
+                    self._schedule_meme_learn(video, stream_id)
                     shared.append(video.bvid)
                 continue
             danmaku, comments, subtitle = await self._collect_detail(video)
@@ -2306,6 +2317,7 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 )
                 self._store.note_shared_today(stream_id)
                 self._save_store()
+                self._schedule_meme_learn(video, stream_id)
                 shared.append(video.bvid)
 
         if shared:
@@ -2443,6 +2455,14 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             if vision_text:
                 content = f"{content}\n\n【画面描述（抽帧）】\n{vision_text}"
         logger.info("bili_read 读取成功：%s（%s）", brief.title, brief.bvid)
+        stream_id = self._stream_from_tool_kwargs(kwargs)
+        if stream_id and self._should_learn_meme(brief):
+            task = asyncio.create_task(
+                self._auto_learn_meme(brief, stream_id), name="bilibili-meme-learn"
+            )
+            self._meme_learned.add(str(brief.bvid or ""))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
         return {
             "success": True,
             "content": content,
@@ -2729,42 +2749,132 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         )
         return _unwrap_db_rows(result)
 
+    def _meme_block_reason(self, bvid: str) -> str:
+        """自动学梗被拦下的原因；空串表示这次可以学。"""
+
+        try:
+            meme_cfg = self.config.meme
+        except Exception:  # noqa: BLE001 - 配置没注入
+            return "插件配置还没加载"
+        if not getattr(meme_cfg, "enabled", False):
+            return "「学梗 → 启用学梗」没打开"
+        if not getattr(meme_cfg, "auto_learn", True):
+            return "「学梗 → 自动学梗」没打开"
+        if bvid and bvid in self._meme_learned:
+            return "这个视频这次运行里已经学过了"
+        if bvid and self._store is not None and self._store.meme_seen(bvid):
+            return "这个视频以前已经学过（或者判断过不是梗）"
+        limit = _to_int(getattr(meme_cfg, "auto_max_per_day", 3), 3)
+        if limit > 0 and self._store is not None:
+            used = self._store.memes_today()
+            if used >= limit:
+                return "今天自动学梗已经判断了 %s 个（上限 %s）" % (used, limit)
+        return ""
+
     def _should_learn_meme(self, brief: VideoBrief) -> bool:
-        """自动学梗的门槛：开关打开 + 标题像梗类视频 + 这个视频没学过。"""
+        """贴链接自动读时：标题像梗类视频才顺手学（分享路径走 _should_learn_from_share）。"""
+
+        bvid = str(getattr(brief, "bvid", "") or "")
+        if self._meme_block_reason(bvid):
+            return False
+        title = str(getattr(brief, "title", "") or "")
+        return any(hint in title for hint in MEME_TITLE_HINTS)
+
+    def _should_learn_from_share(self, video: Any) -> bool:
+        """分享成功时：默认每个分享出去的视频都让模型判断一次是不是梗。"""
 
         try:
             meme_cfg = self.config.meme
         except Exception:  # noqa: BLE001 - 配置没注入
             return False
-        if not getattr(meme_cfg, "enabled", False):
+        if not getattr(meme_cfg, "auto_from_share", True):
             return False
-        if not getattr(meme_cfg, "auto_learn", True):
-            return False
-        bvid = str(getattr(brief, "bvid", "") or "")
-        if bvid and bvid in self._meme_learned:
-            return False
-        title = str(getattr(brief, "title", "") or "")
-        return any(hint in title for hint in MEME_TITLE_HINTS)
+        return not self._meme_block_reason(str(getattr(video, "bvid", "") or ""))
+
+    def _schedule_meme_learn(self, video: Any, stream_id: str) -> None:
+        """分享成功后挂一个后台任务去学梗：不拖慢分享，失败只留日志。"""
+
+        if not stream_id:
+            return
+        bvid = str(getattr(video, "bvid", "") or "")
+        if not self._should_learn_from_share(video):
+            reason = self._meme_block_reason(bvid)
+            if reason:
+                logger.debug("这次不学梗（%s）：%s", bvid or "-", reason)
+            return
+        if bvid:
+            self._meme_learned.add(bvid)
+        task = asyncio.create_task(
+            self._auto_learn_video(video, stream_id), name="bilibili-meme-learn"
+        )
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        logger.info(
+            "分享成功，排队从视频里学梗：%s（%s）",
+            getattr(video, "title", "") or "-",
+            bvid or "-",
+        )
+
+    async def _auto_learn_video(self, video: Any, stream_id: str) -> None:
+        """把刚分享的视频完整读一遍，再交给模型判断值不值得入库。"""
+
+        bvid = str(getattr(video, "bvid", "") or "")
+        raw = str(getattr(video, "url", "") or "") or bvid
+        if not raw:
+            return
+        try:
+            brief, _content = await asyncio.wait_for(
+                self.read_video(raw, detail="full"), timeout=240.0
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 读失败就放弃这次，等下次再遇到
+            logger.info("自动学梗放弃：视频没读成功（%s）", exc)
+            if bvid:
+                self._meme_learned.discard(bvid)
+            return
+        await self._auto_learn_meme(brief, stream_id)
 
     async def _auto_learn_meme(self, brief: VideoBrief, stream_id: str) -> None:
-        """梗类视频被自动读到时，顺手学一次（只写库，失败只留日志）。"""
+        """已经拿到视频材料时顺手学一次（只写库，失败只留日志）。"""
 
         bvid = str(getattr(brief, "bvid", "") or "")
         if bvid:
             self._meme_learned.add(bvid)
+        if self._store is not None:
+            try:
+                self._store.meme_note_today()
+                self._save_store()
+            except Exception as exc:  # noqa: BLE001 - 计数失败不影响学梗
+                logger.debug("记录学梗次数失败：%s", exc)
         try:
             ok, text = await asyncio.wait_for(
-                self._learn_from_brief(brief), timeout=120.0
+                self._learn_from_brief(brief), timeout=180.0
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 自动学梗失败只留日志
             logger.info("自动学梗失败：%s", exc)
+            if bvid:
+                self._meme_learned.discard(bvid)
             return
+        first_line = (text or "").splitlines()[0] if text else ""
         if not ok:
             logger.info("自动学梗没有入库：%s", text)
+            if self._store is not None and bvid:
+                try:
+                    self._store.meme_mark(bvid, ok=False)
+                    self._save_store()
+                except Exception:  # noqa: BLE001
+                    pass
             return
-        logger.info("自动学梗成功：%s", (text or "").splitlines()[0] if text else "")
+        if self._store is not None and bvid:
+            try:
+                self._store.meme_mark(bvid, content=first_line, ok=True)
+                self._save_store()
+            except Exception:  # noqa: BLE001
+                pass
+        logger.info("自动学梗成功：%s", first_line)
         await self._append_note(
             stream_id,
             "（顺手从上面这个视频里学到一个梗，已经记进黑话库，聊天里可以自然用：" + (text or "") + "）",

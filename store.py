@@ -68,6 +68,10 @@ class SeenStore:
         self._meta: Dict[str, Any] = {}
         # 每日分享计数：{"2026-11-11": {"__all__": 3, "<stream_id>": 1}}
         self._daily: Dict[str, Dict[str, int]] = {}
+        # 学梗记录：{"bvid": {"at": 时间戳, "content": "梗名", "ok": true}}
+        self._memes: Dict[str, Dict[str, Any]] = {}
+        # 自动学梗的每日计数：{"2026-11-11": 2}
+        self._meme_daily: Dict[str, int] = {}
         self._loaded = False
 
     # ------------------------------------------------------------------
@@ -142,6 +146,18 @@ class SeenStore:
                         continue
                 if clean:
                     self._daily[str(day)] = clean
+        memes = data.get("memes")
+        if isinstance(memes, dict):
+            for bvid, record in memes.items():
+                if isinstance(record, dict):
+                    self._memes[str(bvid)] = dict(record)
+        meme_daily = data.get("meme_daily")
+        if isinstance(meme_daily, dict):
+            for day, value in meme_daily.items():
+                try:
+                    self._meme_daily[str(day)] = int(value)
+                except (TypeError, ValueError):
+                    continue
         self._prune()
 
     def save(self) -> None:
@@ -155,6 +171,8 @@ class SeenStore:
             "auto_interests": self._auto_interests,
             "meta": self._meta,
             "daily": self._daily,
+            "memes": self._memes,
+            "meme_daily": self._meme_daily,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self.path.with_name(self.path.name + ".tmp")
@@ -188,13 +206,30 @@ class SeenStore:
             for bvid, _record in ordered[: len(self._videos) - self.max_records]:
                 self._videos.pop(bvid, None)
         # 每日计数只保留最近 7 天（够统计用，也不会让状态文件膨胀）
+        keep_days = {
+            time.strftime("%Y-%m-%d", time.localtime(now - offset * 86400.0))
+            for offset in range(7)
+        }
         if self._daily:
-            keep = {
-                time.strftime("%Y-%m-%d", time.localtime(now - offset * 86400.0))
-                for offset in range(7)
-            }
-            for day in [key for key in self._daily if key not in keep]:
+            for day in [key for key in self._daily if key not in keep_days]:
                 self._daily.pop(day, None)
+        if self._meme_daily:
+            for day in [key for key in self._meme_daily if key not in keep_days]:
+                self._meme_daily.pop(day, None)
+        # 学梗记录留半年，最多 500 条
+        if self._memes:
+            fresh_memes = {
+                bvid: record
+                for bvid, record in self._memes.items()
+                if now - float(record.get("at") or 0.0) <= 180 * 86400.0
+            }
+            if len(fresh_memes) > 500:
+                ordered_memes = sorted(
+                    fresh_memes.items(),
+                    key=lambda item: float(item[1].get("at") or 0.0),
+                )
+                fresh_memes = dict(ordered_memes[-500:])
+            self._memes = fresh_memes
 
     def is_seen(self, bvid: str, *, now: Optional[float] = None) -> bool:
         """视频是否已经在「已刷名单」里（名单内的不再自动分享）。"""
@@ -323,6 +358,65 @@ class SeenStore:
             str(key): max(0, int(value or 0))
             for key, value in counters.items()
             if str(key)
+        }
+
+    # ------------------------------------------------------------------
+    # 学梗记录
+    # ------------------------------------------------------------------
+
+    def meme_seen(self, bvid: str) -> bool:
+        """这个视频是不是已经自动学过一次了（学不出梗也算，避免反复花模型钱）。"""
+
+        if not bvid:
+            return False
+        return str(bvid) in self._memes
+
+    def meme_mark(
+        self,
+        bvid: str,
+        *,
+        content: str = "",
+        ok: bool = True,
+        now: Optional[float] = None,
+    ) -> None:
+        """记一条学梗结果（ok=False 表示看过了但不是梗 / 没整理出来）。"""
+
+        if not bvid:
+            return
+        self._memes[str(bvid)] = {
+            "at": time.time() if now is None else now,
+            "content": str(content or "")[:120],
+            "ok": bool(ok),
+        }
+
+    def memes_today(self, *, now: Optional[float] = None) -> int:
+        """今天自动学梗用掉了几次。"""
+
+        return max(0, int(self._meme_daily.get(self._day_key(now)) or 0))
+
+    def meme_note_today(self, *, now: Optional[float] = None) -> int:
+        """记一次自动学梗（每调一次模型记一次），返回今天的新计数。"""
+
+        day = self._day_key(now)
+        count = max(0, int(self._meme_daily.get(day) or 0)) + 1
+        self._meme_daily[day] = count
+        return count
+
+    def meme_remaining(self, limit: int, *, now: Optional[float] = None) -> int:
+        """今天还能自动学几个；limit <= 0 表示不限制。"""
+
+        limit = int(limit or 0)
+        if limit <= 0:
+            return 10 ** 6
+        return max(0, limit - self.memes_today(now=now))
+
+    def meme_summary(self, *, now: Optional[float] = None) -> Dict[str, Any]:
+        """学梗记录的快照（日志 / 自查用）。"""
+
+        return {
+            "learned_total": len(self._memes),
+            "learned_ok": sum(1 for item in self._memes.values() if item.get("ok")),
+            "today": self.memes_today(now=now),
         }
 
     # ------------------------------------------------------------------
