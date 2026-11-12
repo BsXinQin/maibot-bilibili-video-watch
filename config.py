@@ -42,7 +42,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="2.3.0",
+        default="2.4.0",
         description="配置版本（由插件维护，请勿手动修改）",
         json_schema_extra={"label": "配置版本"},
     )
@@ -895,6 +895,21 @@ class MemeConfig(PluginConfigBase):
         le=50,
         description="自动学梗每天最多判断几个（0 表示不限）；每判断一个要多调一次模型",
         json_schema_extra={"label": "每天自动学梗上限"},
+    )
+    learn_unshared: bool = Field(
+        default=False,
+        description=(
+            "定时刷到的视频即使这一轮没分享出去，也挑几条读一遍判断是不是梗。"
+            "适合想让它多学点梗；每条要多读一次视频再调一次模型"
+        ),
+        json_schema_extra={"label": "不分享也学"},
+    )
+    unshared_per_round: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description="每轮最多额外拿几个没分享出去的视频去判梗（0 = 关）",
+        json_schema_extra={"label": "每轮额外学几个"},
     )
     llm_task: str = Field(
         default="",

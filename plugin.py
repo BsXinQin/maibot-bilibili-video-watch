@@ -1022,6 +1022,8 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
                 # 分享出去的视频顺手交给后台学梗（2.3.0）
                 self._schedule_meme_learn(result.video, stream_id)
                 shared.append(result.video.bvid)
+        # 这一轮没分享出去的候选也挑几条交给后台判梗（2.4.0，[meme].learn_unshared）
+        self._schedule_unshared_learns(results, set(shared), stream_id)
         detail["shared"] = len(shared)
         detail["bvids"] = shared
         detail["matched"] = [
@@ -2791,13 +2793,65 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
             return False
         return not self._meme_block_reason(str(getattr(video, "bvid", "") or ""))
 
-    def _schedule_meme_learn(self, video: Any, stream_id: str) -> None:
-        """分享成功后挂一个后台任务去学梗：不拖慢分享，失败只留日志。"""
+    def _should_learn_unshared(self, video: Any) -> bool:
+        """这一轮没分享出去的候选：看「不分享也学」开关 + 同样的门槛。"""
+
+        try:
+            meme_cfg = self.config.meme
+        except Exception:  # noqa: BLE001 - 配置没注入
+            return False
+        if not getattr(meme_cfg, "learn_unshared", False):
+            return False
+        return not self._meme_block_reason(str(getattr(video, "bvid", "") or ""))
+
+    def _schedule_unshared_learns(
+        self,
+        results: Sequence[Any],
+        shared_ids: Set[str],
+        stream_id: str,
+    ) -> None:
+        """这一轮没发出去的候选也挑几条去判梗（[meme].learn_unshared）。"""
+
+        if not stream_id or not results:
+            return
+        try:
+            meme_cfg = self.config.meme
+        except Exception:  # noqa: BLE001 - 配置没注入
+            return
+        if not getattr(meme_cfg, "learn_unshared", False):
+            return
+        quota = _to_int(getattr(meme_cfg, "unshared_per_round", 0), 0)
+        if quota <= 0:
+            return
+        picked = 0
+        for result in results:
+            if picked >= quota:
+                break
+            video = getattr(result, "video", None)
+            if video is None:
+                continue
+            bvid = str(getattr(video, "bvid", "") or "")
+            if not bvid or bvid in shared_ids:
+                continue
+            if not self._should_learn_unshared(video):
+                continue
+            self._schedule_meme_learn(video, stream_id, from_share=False)
+            picked += 1
+
+    def _schedule_meme_learn(
+        self, video: Any, stream_id: str, *, from_share: bool = True
+    ) -> None:
+        """把视频挂到后台去学梗：分享路径和「没分享也学」共用，失败只留日志。"""
 
         if not stream_id:
             return
         bvid = str(getattr(video, "bvid", "") or "")
-        if not self._should_learn_from_share(video):
+        allowed = (
+            self._should_learn_from_share(video)
+            if from_share
+            else self._should_learn_unshared(video)
+        )
+        if not allowed:
             reason = self._meme_block_reason(bvid)
             if reason:
                 logger.debug("这次不学梗（%s）：%s", bvid or "-", reason)
@@ -2810,7 +2864,8 @@ class BilibiliInterestSharePlugin(MaiBotPlugin):
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
         logger.info(
-            "分享成功，排队从视频里学梗：%s（%s）",
+            "%s，排队从视频里学梗：%s（%s）",
+            "分享成功" if from_share else "没分享也学",
             getattr(video, "title", "") or "-",
             bvid or "-",
         )

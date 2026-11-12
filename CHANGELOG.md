@@ -5,6 +5,18 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 `_manifest.json` 的 `version` 与 `config.py` 里的 `config_version` 始终一致。
 
+## [2.4.0] - 2026-11-12
+
+### 新增
+
+- **[meme].learn_unshared**（默认 `false`）：这一轮没分享出去的候选也能交给后台判梗。以前只有分享成功的视频会读全文，剩下的只看标题 / 简介，梗在弹幕和热评里，不读就永远学不到。
+- **[meme].unshared_per_round**（默认 `1`，`0`~`5`）：每轮最多额外拿几个没分享出去的候选去判梗（`0` = 关）。
+- 日志区分来源：分享路径打「分享成功，排队从视频里学梗：…」，新路径打「没分享也学，排队从视频里学梗：…」。
+
+### 说明
+
+- 仍然受 `[meme].auto_max_per_day` 限制；判过「不是梗」的视频会记账（`state.json` 的 `memes`），不会重复判断。
+- 打开后每条判梗多一次读视频（full）与一次模型请求，默认关着，按需打开。
 ## [2.3.0] - 2026-11-11
 
 ### 新增

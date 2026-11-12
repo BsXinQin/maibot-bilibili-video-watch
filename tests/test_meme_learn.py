@@ -269,6 +269,76 @@ class ShareLearnTriggerTests(MemePluginTestCase):
         self.assertEqual(calls, [])
 
 
+UNSHARED_ON = {"learn_unshared": True, "unshared_per_round": 1}
+
+
+class UnsharedLearnTests(MemePluginTestCase):
+    """2.4.0：这一轮没分享出去的候选也能拿去判梗（[meme].learn_unshared）。"""
+
+    async def _run(self, plugin, videos):
+        calls = []
+
+        async def fake_learn(v, stream_id):
+            calls.append((getattr(v, "bvid", ""), stream_id))
+
+        plugin._auto_learn_video = fake_learn  # type: ignore[assignment]
+        detail = await plugin._process_target(
+            self._target(), "qq:GroupMessage:1", self._profile(), videos, {}
+        )
+        await self._drain(plugin)
+        return detail, calls
+
+    async def _drain(self, plugin):
+        for _ in range(20):
+            tasks = [task for task in list(plugin._bg_tasks) if not task.done()]
+            if not tasks:
+                return
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _videos(self, count):
+        return [
+            make_video(self.video_module, bvid="BV1TEST0000%d" % (index + 1))
+            for index in range(count)
+        ]
+
+    async def test_unshared_video_is_learned(self):
+        plugin = self._meme_plugin(**UNSHARED_ON)
+        detail, calls = await self._run(plugin, self._videos(2))
+        self.assertEqual(detail["shared"], 1)
+        self.assertEqual(
+            [bvid for bvid, _stream in calls],
+            ["BV1TEST00001", "BV1TEST00002"],
+        )
+
+    async def test_switch_off_only_shared_learns(self):
+        plugin = self._meme_plugin()
+        _detail, calls = await self._run(plugin, self._videos(2))
+        self.assertEqual([bvid for bvid, _stream in calls], ["BV1TEST00001"])
+
+    async def test_quota_limits_extra_videos(self):
+        plugin = self._meme_plugin(learn_unshared=True, unshared_per_round=2)
+        _detail, calls = await self._run(plugin, self._videos(4))
+        self.assertEqual(
+            [bvid for bvid, _stream in calls],
+            ["BV1TEST00001", "BV1TEST00002", "BV1TEST00003"],
+        )
+
+    async def test_quota_zero_disables(self):
+        plugin = self._meme_plugin(learn_unshared=True, unshared_per_round=0)
+        _detail, calls = await self._run(plugin, self._videos(2))
+        self.assertEqual([bvid for bvid, _stream in calls], ["BV1TEST00001"])
+
+    async def test_already_judged_video_is_skipped(self):
+        plugin = self._meme_plugin(**UNSHARED_ON)
+        plugin._store.meme_mark("BV1TEST00002", ok=False)
+        _detail, calls = await self._run(plugin, self._videos(2))
+        self.assertEqual([bvid for bvid, _stream in calls], ["BV1TEST00001"])
+
+    async def test_shared_video_is_not_learned_twice(self):
+        plugin = self._meme_plugin(**UNSHARED_ON)
+        _detail, calls = await self._run(plugin, self._videos(1))
+        self.assertEqual([bvid for bvid, _stream in calls], ["BV1TEST00001"])
+
 class AutoLearnMemeTests(MemePluginTestCase):
     """_auto_learn_meme：成功记梗、判为非梗也记、异常可重试。"""
 
